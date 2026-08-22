@@ -9,7 +9,6 @@ import {
   Text,
   TouchableOpacity,
   View,
-  ActivityIndicator,
 } from "react-native";
 import { KeyboardAwareScrollView } from "react-native-keyboard-aware-scroll-view";
 
@@ -17,7 +16,6 @@ import { InputBox } from "../components/InputBox";
 import { MainButton } from "@/components/MainButton";
 import { API } from "@/api/client";
 import { useStore } from "@/store/useStore";
-import * as AuthService from "@/utils/auth";
 
 export default function Login() {
   const router = useRouter();
@@ -41,57 +39,19 @@ export default function Login() {
     try {
       setIsLoading(true);
 
-      // 2. 가입된 계정이 있는지 확인 (비밀번호 검증은 서버 몫)
-      const account = await AuthService.getAccount();
-      if (!account) {
-        Alert.alert(
-          "알림",
-          "가입된 계정이 없습니다. 먼저 회원가입을 진행해주세요.",
-        );
-        return;
-      }
-      if (account.id !== id) {
-        Alert.alert("로그인 실패", "아이디 또는 비밀번호가 일치하지 않습니다.");
-        return;
-      }
+      // 2. 아이디 → 이메일 해석 후 Supabase 로그인까지 API.login 이 처리한다.
+      //    세션은 supabase-js 가 AsyncStorage 에 알아서 저장·갱신한다.
+      const result = await API.login(id.trim(), password);
 
-      console.log(`🚀 [로그인 시도] ID: ${id}`);
-
-      // 3. API 호출 (입력값 그대로 전달)
-      const result = await API.login(id, password);
-      console.log("📥 [API 응답]", JSON.stringify(result, null, 2));
-
-      if (result.code === 200) {
-        // 4. 토큰 추출 (구조 안전하게 확인)
-        const token = result.data?.accessToken;
-
-        if (!token) {
-          console.error("❌ 토큰이 없습니다! 응답 구조를 확인하세요.");
-          Alert.alert("오류", "서버 응답에 토큰이 없습니다.");
-          return;
-        }
-
-        // 5. 토큰만 저장 (비밀번호는 저장하지 않음)
-        await AuthService.saveToken(token);
-        console.log("💾 토큰 저장 완료! 메인으로 이동합니다.");
-
-        // 6. 응답에 담겨온 내 정보를 전역 상태에 올려둔다
-        const user = result.data?.user;
-        if (user) {
-          setCurrentUser({
-            id: user.id,
-            nickname: user.nickname,
-            dept: user.dept,
-            gender: user.gender,
-            campus: user.campus,
-          });
-        }
-
-        // 7. 강제 이동
-        router.replace("/(tabs)");
-      } else {
+      if (result.code !== 200 || !result.data) {
         Alert.alert("로그인 실패", result.message || "다시 시도해주세요.");
+        return;
       }
+
+      // 3. 내 정보를 전역 상태에 올려둔다 (프로필·팀 생성 화면이 이 값을 쓴다)
+      setCurrentUser(result.data);
+
+      router.replace("/(tabs)");
     } catch (e) {
       console.error("❌ 로그인 에러:", e);
       Alert.alert("오류", "로그인 중 문제가 발생했습니다.");

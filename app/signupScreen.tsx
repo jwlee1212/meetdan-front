@@ -1,6 +1,6 @@
 // 파일: app/signupScreen.tsx
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import React, { useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -23,15 +23,35 @@ import {
   getCollegesByCampus,
 } from "@/constants/departments";
 import { Colors } from "@/constants/theme";
-import * as AuthService from "@/utils/auth";
+import { useStore } from "@/store/useStore";
 import { InputBox } from "../components/InputBox";
 import { MainButton } from "../components/MainButton";
 
-const STEPS = ["이름", "성별", "학과", "이메일 인증", "계정 정보"] as const;
+// 이메일 인증 시점에 서버로 가입 정보를 넘기므로 계정 정보를 먼저 받는다
+const STEPS = [
+  "이름",
+  "성별",
+  "나이",
+  "학과",
+  "계정 정보",
+  "이메일 인증",
+] as const;
 const TOTAL_STEPS = STEPS.length;
 const EMAIL_REGEX = /^[a-zA-Z0-9._%+-]+@dankook\.ac\.kr$/i;
 const MIN_ID_LENGTH = 2;
-const MIN_PASSWORD_LENGTH = 4;
+const MIN_PASSWORD_LENGTH = 6;
+
+/**
+ * 나이가 아니라 출생연도를 받는다.
+ * 나이를 그대로 저장하면 해가 바뀌어도 값이 안 늙는다. 팀 평균 나이
+ * (teams.avg_age)는 서버가 팀원들의 이 값으로 계산한다(마이그레이션 006).
+ */
+const CURRENT_YEAR = new Date().getFullYear();
+const MIN_BIRTH_YEAR = CURRENT_YEAR - 40; // 세는나이 41세
+const MAX_BIRTH_YEAR = CURRENT_YEAR - 16; // 세는나이 17세
+
+/** 세는나이. 서버 korean_age() 와 같은 식이다. */
+const toKoreanAge = (birthYear: number) => CURRENT_YEAR - birthYear + 1;
 
 // 캠퍼스 → 단과대 → 학과 전환 애니메이션 설정
 const STAGE_FADE_OUT_DURATION = 130; // 현재 목록이 사라지는 시간
@@ -40,11 +60,13 @@ const STAGE_SLIDE_DISTANCE = 28; // 좌우로 미끄러지는 거리(px)
 
 export default function SignupScreen() {
   const router = useRouter();
+  const setCurrentUser = useStore((state) => state.setCurrentUser);
   const [step, setStep] = useState(0);
 
   // 입력 값
   const [name, setName] = useState("");
   const [gender, setGender] = useState<"M" | "F" | null>(null);
+  const [birthYear, setBirthYear] = useState("");
   const [campus, setCampus] = useState<Campus | null>(null);
   const [college, setCollege] = useState<College | null>(null);
   const [dept, setDept] = useState("");
@@ -131,14 +153,14 @@ export default function SignupScreen() {
       return;
     }
     // 학과 단계는 캠퍼스 → 단과대 → 학과 순서라 한 단계씩 거슬러 올라감
-    if (step === 2 && college) {
+    if (step === 3 && college) {
       runStageTransition(-1, () => {
         setCollege(null);
         setDept("");
       });
       return;
     }
-    if (step === 2 && campus) {
+    if (step === 3 && campus) {
       runStageTransition(-1, () => setCampus(null));
       return;
     }
@@ -171,12 +193,8 @@ export default function SignupScreen() {
 
     try {
       setIsSendingCode(true);
-      const result = await API.requestEmailAuth(email.trim(), {
-        name,
-        gender,
-        campus: campus ?? "",
-        dept,
-      });
+      // 계정 생성은 마지막 '가입 완료'에서 한 번에 한다. 여기서는 인증번호만 받는다.
+      const result = await API.requestEmailAuth(email.trim());
       if (result.code === 200) {
         setIsEmailSent(true);
         Alert.alert(
@@ -235,6 +253,24 @@ export default function SignupScreen() {
     }
 
     if (step === 2) {
+      const year = parseInt(birthYear, 10);
+      if (
+        birthYear.length !== 4 ||
+        Number.isNaN(year) ||
+        year < MIN_BIRTH_YEAR ||
+        year > MAX_BIRTH_YEAR
+      ) {
+        Alert.alert(
+          "알림",
+          `출생연도를 ${MIN_BIRTH_YEAR}~${MAX_BIRTH_YEAR} 사이로 입력해주세요.`,
+        );
+        return;
+      }
+      setStep(3);
+      return;
+    }
+
+    if (step === 3) {
       if (!campus) {
         Alert.alert("알림", "캠퍼스를 선택해주세요.");
         return;
@@ -245,15 +281,6 @@ export default function SignupScreen() {
       }
       if (!dept) {
         Alert.alert("알림", "학과를 선택해주세요.");
-        return;
-      }
-      setStep(3);
-      return;
-    }
-
-    if (step === 3) {
-      if (!isEmailVerified) {
-        Alert.alert("알림", "이메일 인증을 완료해주세요.");
         return;
       }
       setStep(4);
@@ -277,8 +304,35 @@ export default function SignupScreen() {
         return;
       }
 
+      // 아이디 중복은 여기서 걸러낸다. 마지막 단계에서 터지면
+      // 이메일 인증까지 다 해놓고 계정 정보 단계로 되돌아가야 해서 사용자가 화난다.
+      try {
+        setIsSubmitting(true);
+        const check = await API.checkLoginId(userId.trim());
+        if (check.code !== 200) {
+          Alert.alert("알림", check.message ?? "다른 아이디를 사용해주세요.");
+          return;
+        }
+      } catch (e) {
+        Alert.alert("오류", "아이디 확인 중 문제가 발생했습니다.");
+        return;
+      } finally {
+        setIsSubmitting(false);
+      }
+
+      setStep(5);
+      return;
+    }
+
+    if (step === 5) {
+      if (!isEmailVerified) {
+        Alert.alert("알림", "이메일 인증을 완료해주세요.");
+        return;
+      }
+
       // 앞 단계에서 이미 검증했지만, 타입 보장을 위해 한 번 더 확인
-      if (!gender || !campus || !dept) {
+      const year = parseInt(birthYear, 10);
+      if (!gender || !campus || !dept || Number.isNaN(year)) {
         Alert.alert("알림", "이전 단계의 정보를 다시 확인해주세요.");
         return;
       }
@@ -286,40 +340,28 @@ export default function SignupScreen() {
       try {
         setIsSubmitting(true);
 
-        // 비밀번호는 서버에만 보내고 기기에는 남기지 않습니다.
+        // 비밀번호는 Supabase Auth 로만 가고 기기에는 남기지 않습니다.
         const result = await API.signup({
           name: name.trim(),
           gender,
+          birthYear: year,
           campus,
           dept,
           email: email.trim(),
           userId: userId.trim(),
+          password,
         });
 
-        if (result.code !== 200) {
+        if (result.code !== 200 || !result.data) {
           Alert.alert("회원가입 실패", result.message ?? "다시 시도해주세요.");
           return;
         }
 
-        const token = result.data?.accessToken;
-        if (!token) {
-          Alert.alert("오류", "서버 응답에 토큰이 없습니다.");
-          return;
-        }
-
-        // 발급받은 토큰 저장 + 화면 표시용 계정 정보(비밀번호 제외) 저장
-        await AuthService.saveToken(token);
-        await AuthService.saveAccount({
-          id: userId.trim(),
-          name: name.trim(),
-          gender,
-          campus,
-          dept,
-          email: email.trim(),
-        });
+        // 가입 직후 이미 로그인된 상태다. 다시 로그인시키지 않고 바로 들여보낸다.
+        setCurrentUser(result.data);
 
         Alert.alert("회원가입 완료", "밋단에 오신 것을 환영해요!", [
-          { text: "확인", onPress: () => router.replace("/login") },
+          { text: "확인", onPress: () => router.replace("/(tabs)") },
         ]);
       } catch (e) {
         Alert.alert("오류", "회원가입 처리 중 문제가 발생했습니다.");
@@ -333,6 +375,10 @@ export default function SignupScreen() {
 
   return (
     <View style={styles.container}>
+      {/* iOS 엣지 스와이프로 뒤로가면 handleBack 의 단계별 로직을 건너뛰고
+          화면 자체를 나가버려서 꺼둔다. 뒤로가기는 헤더의 버튼으로만 한다. */}
+      <Stack.Screen options={{ gestureEnabled: false }} />
+
       {/* 헤더 + 프로세스바 (키보드 영향 없는 고정 영역) */}
       <View style={styles.header}>
         <View style={styles.headerRow}>
@@ -443,6 +489,35 @@ export default function SignupScreen() {
         )}
 
         {step === 2 && (
+          <View>
+            <Text style={styles.title}>태어난 연도를{"\n"}알려주세요</Text>
+            <Text style={styles.subtitle}>
+              팀 평균 나이를 자동으로 계산하는 데 쓰여요
+            </Text>
+            <InputBox
+              label="출생연도"
+              placeholder={`${MIN_BIRTH_YEAR} ~ ${MAX_BIRTH_YEAR}`}
+              value={birthYear}
+              onChangeText={(text) =>
+                setBirthYear(text.replace(/[^0-9]/g, "").slice(0, 4))
+              }
+              keyboardType="number-pad"
+              maxLength={4}
+              autoFocus
+            />
+            {birthYear.length === 4 && (
+              <Text style={styles.ageEcho}>
+                {toKoreanAge(parseInt(birthYear, 10))}세
+              </Text>
+            )}
+            <Text style={styles.noticeText}>
+              한 번 등록하면 바꿀 수 없어요. 나이가 그대로 노출되지는 않고, 팀에
+              모인 사람들의 평균으로만 보여요.
+            </Text>
+          </View>
+        )}
+
+        {step === 3 && (
           <Animated.View style={stageAnimatedStyle}>
             {/* 학과 단계 1/3 : 캠퍼스 선택 */}
             {!campus && (
@@ -567,7 +642,40 @@ export default function SignupScreen() {
           </Animated.View>
         )}
 
-        {step === 3 && (
+        {step === 4 && (
+          <View>
+            <Text style={styles.title}>
+              로그인에 사용할{"\n"}계정 정보를 입력해주세요
+            </Text>
+            <Text style={styles.subtitle}>
+              아이디와 비밀번호는 로그인 시 사용돼요
+            </Text>
+
+            <InputBox
+              label="아이디"
+              placeholder={`${MIN_ID_LENGTH}자 이상 입력`}
+              value={userId}
+              onChangeText={setUserId}
+              autoFocus
+            />
+            <InputBox
+              label="비밀번호"
+              placeholder={`${MIN_PASSWORD_LENGTH}자 이상 입력`}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+            />
+            <InputBox
+              label="비밀번호 확인"
+              placeholder="비밀번호를 다시 입력해주세요"
+              value={passwordConfirm}
+              onChangeText={setPasswordConfirm}
+              secureTextEntry
+            />
+          </View>
+        )}
+
+        {step === 5 && (
           <View>
             <Text style={styles.title}>이메일 인증을{"\n"}진행해주세요</Text>
             <Text style={styles.subtitle}>
@@ -638,39 +746,6 @@ export default function SignupScreen() {
                 </Text>
               </View>
             )}
-          </View>
-        )}
-
-        {step === 4 && (
-          <View>
-            <Text style={styles.title}>
-              로그인에 사용할{"\n"}계정 정보를 입력해주세요
-            </Text>
-            <Text style={styles.subtitle}>
-              아이디와 비밀번호는 로그인 시 사용돼요
-            </Text>
-
-            <InputBox
-              label="아이디"
-              placeholder={`${MIN_ID_LENGTH}자 이상 입력`}
-              value={userId}
-              onChangeText={setUserId}
-              autoFocus
-            />
-            <InputBox
-              label="비밀번호"
-              placeholder={`${MIN_PASSWORD_LENGTH}자 이상 입력`}
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-            />
-            <InputBox
-              label="비밀번호 확인"
-              placeholder="비밀번호를 다시 입력해주세요"
-              value={passwordConfirm}
-              onChangeText={setPasswordConfirm}
-              secureTextEntry
-            />
           </View>
         )}
 
@@ -810,6 +885,19 @@ const styles = StyleSheet.create({
   genderRow: {
     flexDirection: "row",
     gap: 12,
+  },
+  // 출생연도를 적는 동안 "지금 몇 살로 계산되는지"를 바로 되비춘다
+  ageEcho: {
+    marginTop: -8,
+    fontSize: 15,
+    fontWeight: "600",
+    color: Colors.light.primary,
+  },
+  noticeText: {
+    marginTop: 20,
+    fontSize: 13,
+    lineHeight: 19,
+    color: "#999",
   },
   genderButton: {
     flex: 1,

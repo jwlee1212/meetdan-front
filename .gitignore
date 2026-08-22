@@ -31,6 +31,8 @@ yarn-error.*
 *.pem
 
 # local env files
+# .env.example 은 커밋해서 팀원이 형태를 알 수 있게 한다.
+.env
 .env*.local
 
 # typescript

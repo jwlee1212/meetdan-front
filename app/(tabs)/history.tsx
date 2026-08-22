@@ -1,9 +1,19 @@
 // 파일: app/(tabs)/history.tsx
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import { useMemo, useState } from "react";
-import { Alert, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useMemo, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 
+import { API } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PressScale } from "@/components/ui/press-scale";
@@ -11,20 +21,12 @@ import { Divider, Screen, ScreenHeader } from "@/components/ui/screen";
 import { Segmented } from "@/components/ui/segmented";
 import { Palette, Radius, Spacing, Typo } from "@/constants/theme";
 import { dDayLabel, formatPlanSummary, isPastPlan } from "@/utils/plan";
-import { Match, RequestData, Team, useStore } from "../../store/useStore";
+import { Match, MatchRequest, useStore } from "../../store/useStore";
 
 type TabType = "RECEIVED" | "SENT" | "MATCHES";
 
-interface RequestRow {
-  id: number;
-  timestamp: string;
-  team: Team;
-  received: boolean;
-  status: RequestData["status"];
-}
-
 /** 신청 상태별로 보여줄 뱃지와 안내 문구 */
-const requestStatusView = (row: RequestRow) => {
+const requestStatusView = (row: MatchRequest) => {
   if (row.status === "ACCEPTED") {
     return {
       label: "수락함",
@@ -54,51 +56,64 @@ const requestStatusView = (row: RequestRow) => {
 
 export default function HistoryTab() {
   const router = useRouter();
-  const { receivedRequests, sentRequests, posts, myTeams, matchedTeams, matches } =
-    useStore();
+  const receivedList = useStore((state) => state.receivedRequests);
+  const sentList = useStore((state) => state.sentRequests);
+  const matches = useStore((state) => state.matches);
+  const setRequests = useStore((state) => state.setRequests);
+  const setMatches = useStore((state) => state.setMatches);
+
   const [activeTab, setActiveTab] = useState<TabType>("RECEIVED");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // 게시판에서 내려간 팀(매칭 성사 포함)도 신청 기록에는 남아야 하므로
-  // 내 팀 목록과 매칭 보관함까지 뒤진다
-  const findTeam = useMemo(
-    () => (teamId: number) =>
-      posts.find((p) => p.id === teamId) ??
-      myTeams.find((t) => t.id === teamId) ??
-      matchedTeams.find((t) => t.id === teamId),
-    [posts, myTeams, matchedTeams],
+  /**
+   * 신청도 매칭도 서버가 유일한 출처다.
+   *
+   * 상대가 방금 수락했을 수도, 내 신청이 자동 거절됐을 수도 있다
+   * (상대 팀이 다른 팀과 매칭되면 트리거가 남은 신청을 전부 거절한다).
+   * 화면에서 상태를 짐작하지 않고 탭에 들어올 때마다 다시 읽는다.
+   */
+  const reload = useCallback(async () => {
+    const [requests, matched] = await Promise.all([
+      API.getMatchRequests(),
+      API.getMyMatches(),
+    ]);
+
+    // 401(세션 만료)은 _layout.tsx 가 로그인 화면으로 보내므로 조용히 둔다.
+    const failed = [requests, matched].find(
+      (r) => r.code !== 200 && r.code !== 401,
+    );
+    if (failed) {
+      Alert.alert("오류", failed.message ?? "활동 내역을 불러오지 못했어요.");
+    }
+
+    if (requests.code === 200 && requests.data) setRequests(requests.data);
+    if (matched.code === 200 && matched.data) {
+      setMatches(matched.data.matches, matched.data.partnerTeams);
+    }
+  }, [setRequests, setMatches]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      (async () => {
+        await reload();
+        if (alive) setIsLoading(false);
+      })();
+      return () => {
+        alive = false;
+      };
+    }, [reload]),
   );
 
-  // 신청 데이터에 상대 팀 정보를 붙이고, 찾지 못한 건 걸러낸다
-  const receivedList = useMemo<RequestRow[]>(
-    () =>
-      receivedRequests
-        .map((req) => ({
-          id: req.id,
-          timestamp: req.timestamp,
-          team: findTeam(req.senderTeamId)!,
-          received: true,
-          status: req.status,
-        }))
-        .filter((r) => !!r.team),
-    [receivedRequests, findTeam],
-  );
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await reload();
+    setIsRefreshing(false);
+  };
 
-  const sentList = useMemo<RequestRow[]>(
-    () =>
-      sentRequests
-        .map((req) => ({
-          id: req.id,
-          timestamp: req.timestamp,
-          team: findTeam(req.receiverTeamId)!,
-          received: false,
-          status: req.status,
-        }))
-        .filter((r) => !!r.team),
-    [sentRequests, findTeam],
-  );
-
-  const renderRequestItem = ({ item }: { item: RequestRow }) => {
-    const { team, received, status } = item;
+  const renderRequestItem = ({ item }: { item: MatchRequest }) => {
+    const { partnerTeam: team, received, status } = item;
     // 아직 답을 안 한 '받은 신청'만 상세로 들어가 수락/거절할 수 있다
     const actionable = received && status === "WAITING";
     const muted = !received || status !== "WAITING";
@@ -109,8 +124,9 @@ export default function HistoryTab() {
         scaleTo={0.98}
         style={styles.row}
         disabled={!actionable}
+        // 상세 화면은 '신청 한 건'을 연다. 팀 id 로는 어느 신청인지 알 수 없다.
         onPress={() =>
-          actionable && router.push(`/match/party/${team.id}` as any)
+          actionable && router.push(`/match/party/${item.id}` as any)
         }
       >
         <View style={styles.avatarWrap}>
@@ -283,7 +299,11 @@ export default function HistoryTab() {
         ]}
       />
 
-      {activeTab === "MATCHES" ? (
+      {isLoading ? (
+        <View style={styles.loading}>
+          <ActivityIndicator color={Palette.brand} />
+        </View>
+      ) : activeTab === "MATCHES" ? (
         <FlatList
           data={sortedMatches}
           renderItem={renderMatchItem}
@@ -291,16 +311,30 @@ export default function HistoryTab() {
           showsVerticalScrollIndicator={false}
           ItemSeparatorComponent={() => <Divider inset={76} />}
           contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={handleRefresh}
+              tintColor={Palette.brand}
+            />
+          }
           ListEmptyComponent={<EmptyState {...emptyByTab} />}
         />
       ) : (
         <FlatList
           data={activeTab === "RECEIVED" ? receivedList : sentList}
           renderItem={renderRequestItem}
-          keyExtractor={(item) => item.id.toString()}
+          keyExtractor={(item) => item.id}
           showsVerticalScrollIndicator={false}
           ItemSeparatorComponent={() => <Divider inset={76} />}
           contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={handleRefresh}
+              tintColor={Palette.brand}
+            />
+          }
           ListEmptyComponent={<EmptyState {...emptyByTab} />}
         />
       )}
@@ -309,6 +343,7 @@ export default function HistoryTab() {
 }
 
 const styles = StyleSheet.create({
+  loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   listContent: { paddingTop: Spacing.sm, paddingBottom: Spacing.xxxl },
 
   row: {

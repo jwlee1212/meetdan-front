@@ -1,11 +1,10 @@
 // 파일 경로: app/(tabs)/profile.tsx
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
-  Image,
   Modal,
   Platform,
   Pressable,
@@ -13,6 +12,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { Image } from "expo-image";
 import { KeyboardAwareScrollView } from "react-native-keyboard-aware-scroll-view";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -35,24 +35,17 @@ import {
   Typo,
 } from "@/constants/theme";
 import { useStore } from "@/store/useStore";
-import * as AuthService from "@/utils/auth";
-import type { Account, UserProfile } from "@/utils/auth";
+import { API } from "@/api/client";
+import type { ProfilePatch } from "@/api/client";
+import { profileImages } from "@/constants/avatars";
 
-// 💡 12개 프로필 이미지 에셋 불러오기
-const profileImages = [
-  require("../../assets/images/profile_avatars/1.png"),
-  require("../../assets/images/profile_avatars/2.png"),
-  require("../../assets/images/profile_avatars/3.png"),
-  require("../../assets/images/profile_avatars/4.png"),
-  require("../../assets/images/profile_avatars/5.png"),
-  require("../../assets/images/profile_avatars/6.png"),
-  require("../../assets/images/profile_avatars/7.png"),
-  require("../../assets/images/profile_avatars/8.png"),
-  require("../../assets/images/profile_avatars/9.png"),
-  require("../../assets/images/profile_avatars/10.png"),
-  require("../../assets/images/profile_avatars/11.png"),
-  require("../../assets/images/profile_avatars/12.png"),
-];
+/** 편집 폼이 비어 있을 때의 기본값 */
+const EMPTY_PROFILE: ProfilePatch = {
+  nickname: "",
+  bio: "",
+  mbti: "",
+  avatarIdx: 0,
+};
 
 const MBTI_TYPES = [
   "ISTJ", "ISFJ", "INFJ", "INTJ",
@@ -80,35 +73,30 @@ export default function ProfileTab() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  // 로그인한 내 정보 (전역). 학과·성별·캠퍼스의 기준값
+  // 로그인한 내 정보 (전역). Supabase profiles 한 줄이 그대로 들어있다.
   const currentUser = useStore((state) => state.currentUser);
-  const clearCurrentUser = useStore((state) => state.clearCurrentUser);
+  const setCurrentUser = useStore((state) => state.setCurrentUser);
 
-  // 회원가입 때 확정된 정보 (읽기 전용). 이메일·아이디는 여기에만 있다
-  const [account, setAccount] = useState<Account | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  // 사용자가 바꿀 수 있는 정보
-  const [profile, setProfile] = useState<UserProfile>(AuthService.DEFAULT_PROFILE);
   // 편집 중인 임시 값. 취소하면 그냥 버린다.
-  const [draft, setDraft] = useState<UserProfile>(AuthService.DEFAULT_PROFILE);
+  const [draft, setDraft] = useState<ProfilePatch>(EMPTY_PROFILE);
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   const [isModalVisible, setModalVisible] = useState(false);
   const [tempSelectedIdx, setTempSelectedIdx] = useState(0);
 
-  useEffect(() => {
-    (async () => {
-      const [savedAccount, savedProfile] = await Promise.all([
-        AuthService.getAccount(),
-        AuthService.getProfile(),
-      ]);
-      setAccount(savedAccount);
-      setProfile(savedProfile);
-      setIsLoading(false);
-    })();
-  }, []);
+  // _layout.tsx 가 세션 복원 직후 채워준다. 그 전 아주 잠깐만 비어 있다.
+  const isLoading = currentUser == null;
+
+  // 저장된 값만 뽑아낸 편집용 조각
+  const profile: ProfilePatch = currentUser
+    ? {
+        nickname: currentUser.nickname,
+        bio: currentUser.bio,
+        mbti: currentUser.mbti,
+        avatarIdx: currentUser.avatarIdx,
+      }
+    : EMPTY_PROFILE;
 
   const startEditing = () => {
     setDraft(profile); // 현재 저장된 값에서 시작
@@ -129,11 +117,15 @@ export default function ProfileTab() {
       return;
     }
 
-    const next: UserProfile = { ...draft, nickname, bio };
     try {
       setIsSaving(true);
-      await AuthService.saveProfile(next);
-      setProfile(next);
+      const result = await API.updateMyProfile({ ...draft, nickname, bio });
+      if (result.code !== 200 || !result.data) {
+        Alert.alert("오류", result.message ?? "프로필 저장에 실패했어요.");
+        return;
+      }
+      // 서버가 돌려준 값으로 전역 상태를 갱신한다 (displayName 도 여기서 다시 계산됨)
+      setCurrentUser(result.data);
       setIsEditing(false);
     } catch (e) {
       Alert.alert("오류", "프로필 저장 중 문제가 발생했습니다.");
@@ -159,11 +151,9 @@ export default function ProfileTab() {
         text: "로그아웃",
         style: "destructive",
         onPress: async () => {
-          // 토큰과 전역 유저 정보를 함께 비운다.
-          // 안 비우면 재시작 시 다시 로그인된 상태로 들어가거나
-          // 다음 계정에 이전 유저 정보가 남는다.
-          await AuthService.removeToken();
-          clearCurrentUser();
+          // 세션을 지우면 _layout.tsx 의 onAuthStateChange 가
+          // 전역 유저 정보를 비우고 로그인 화면으로 보낸다.
+          await API.logout();
           router.replace("/login");
         },
       },
@@ -173,23 +163,18 @@ export default function ProfileTab() {
   // 편집 중에는 미리보기가 바로 보이도록 draft 값을 쓴다
   const shown = isEditing ? draft : profile;
 
-  /**
-   * 화면에 뿌릴 내 정보.
-   * 전역 currentUser를 우선하고, 아직 안 채워졌으면 기기에 저장된 가입 정보로 메운다.
-   * 이메일·아이디는 currentUser에 없으므로 항상 account에서 가져온다.
-   */
+  /** 화면에 뿌릴 내 정보. 전부 서버 profiles 에서 온다. */
   const info = {
-    name: account?.name ?? currentUser?.nickname ?? null,
-    gender: currentUser?.gender ?? account?.gender ?? null,
-    campus: currentUser?.campus ?? account?.campus ?? null,
-    dept: currentUser?.dept ?? account?.dept ?? null,
-    email: account?.email ?? null,
-    userId: account?.id ?? null,
+    name: currentUser?.name ?? null,
+    gender: currentUser?.gender ?? null,
+    campus: currentUser?.campus ?? null,
+    dept: currentUser?.dept ?? null,
+    email: currentUser?.email ?? null,
+    userId: currentUser?.loginId ?? null,
   };
   const hasInfo = !!(info.name || info.dept || info.campus);
 
-  const displayName =
-    shown.nickname.trim() || info.name || currentUser?.nickname || "밋단 회원";
+  const displayName = shown.nickname.trim() || info.name || "밋단 회원";
   // 저장된 인덱스가 에셋 개수를 벗어나도 화면이 깨지지 않게
   const avatarSource =
     profileImages[shown.avatarIdx] ?? profileImages[0];

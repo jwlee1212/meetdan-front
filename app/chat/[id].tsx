@@ -20,6 +20,7 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { API } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
 import {
   BottomSheet,
@@ -226,7 +227,7 @@ export default function ChatRoom() {
 
   // 매칭에 묶인 실제 팀. 학과·인원수를 여기서 가져온다.
   // 매칭이 성사되면 게시판에서 내려가므로 보관함(matchedTeams)까지 본다.
-  const findTeam = (teamId?: number) =>
+  const findTeam = (teamId?: string) =>
     teamId === undefined
       ? undefined
       : (posts.find((p) => p.id === teamId) ??
@@ -327,7 +328,23 @@ export default function ChatRoom() {
 
   /* ---------------- 약속 확정 ---------------- */
 
-  const handleSavePlan = (next: ConfirmedPlan) => {
+  /**
+   * 약속은 matches 한 줄(plan_date/plan_time/plan_place)에 저장된다.
+   * 서버에 먼저 쓰고 화면을 고친다 — 반대로 하면 실패했을 때 나에게만
+   * 보이는 약속이 남고, 활동 탭이 다시 읽는 순간 조용히 사라진다.
+   *
+   * match 가 없는 방(예전 경로로 팀 id 를 들고 들어온 경우)은 서버에
+   * 쓸 대상이 없으므로 예전처럼 화면에만 남긴다.
+   */
+  const handleSavePlan = async (next: ConfirmedPlan) => {
+    if (match) {
+      const result = await API.setMatchPlan(match.id, next);
+      if (result.code !== 200) {
+        Alert.alert("오류", result.message ?? "약속을 저장하지 못했어요.");
+        return;
+      }
+    }
+
     setConfirmedPlan(String(id), next, roomTitle);
     setPlanSheetOpen(false);
     appendSystemMessage(
@@ -335,7 +352,15 @@ export default function ChatRoom() {
     );
   };
 
-  const handleRemovePlan = () => {
+  const handleRemovePlan = async () => {
+    if (match) {
+      const result = await API.clearMatchPlan(match.id);
+      if (result.code !== 200) {
+        Alert.alert("오류", result.message ?? "약속을 취소하지 못했어요.");
+        return;
+      }
+    }
+
     clearConfirmedPlan(String(id));
     setPlanSheetOpen(false);
     appendSystemMessage("확정된 약속을 취소했어요.");

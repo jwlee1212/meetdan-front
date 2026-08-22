@@ -1,18 +1,27 @@
 // 파일: app/(tabs)/my_team.tsx
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
-import { useState } from "react";
+import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
+  Keyboard,
+  KeyboardAvoidingView,
   Modal,
+  Platform,
   Pressable,
+  RefreshControl,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+import { API } from "@/api/client";
 
 import { Badge, BadgeTone } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -31,6 +40,8 @@ import { useStore, Team } from "../../store/useStore";
 
 /** 팀 상태를 뱃지 문구/색으로 한 번에 정리 */
 function teamStatus(team: Team): { label: string; tone: BadgeTone } {
+  // 매칭이 성사된 팀은 게시판에서 내려가고 더 이상 신청을 주고받지 않는다.
+  if (team.status === "MATCHED") return { label: "매칭 완료", tone: "brand" };
   if (team.status === "ACTIVE") return { label: "공개중", tone: "solid" };
   if (team.currentCount >= team.count)
     return { label: "준비완료", tone: "success" };
@@ -41,46 +52,160 @@ export default function MyTeamTab() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const {
-    myTeams,
-    deleteTeam,
-    joinTeamByCode,
-    toggleTeamStatus,
-    simulateJoinMember,
-  } = useStore();
+  const myTeams = useStore((state) => state.myTeams);
+  const setMyTeams = useStore((state) => state.setMyTeams);
 
-  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [joinModalVisible, setJoinModalVisible] = useState(false);
   const [inputCode, setInputCode] = useState("");
+  const [isJoining, setIsJoining] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [isKeyboardOpen, setIsKeyboardOpen] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const handleDelete = (id: number) => {
-    Alert.alert("팀을 삭제할까요?", "삭제하면 되돌릴 수 없어요.", [
-      { text: "취소", style: "cancel" },
-      { text: "삭제", style: "destructive", onPress: () => deleteTeam(id) },
-    ]);
+  // 시트 하단 여백을 키보드 상태에 맞춰 조정하려면 열림/닫힘을 알아야 한다.
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () =>
+      setIsKeyboardOpen(true),
+    );
+    const hide = Keyboard.addListener("keyboardDidHide", () =>
+      setIsKeyboardOpen(false),
+    );
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+
+  // 화면을 벗어난 뒤 타이머가 살아 있으면 언마운트된 컴포넌트를 건드린다.
+  useEffect(() => {
+    return () => {
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    };
+  }, []);
+
+  const handleCopyCode = async (team: Team) => {
+    if (!team.inviteCode) return;
+
+    await Clipboard.setStringAsync(team.inviteCode);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+    // "복사됨" 표시는 잠깐만 띄운다. 다른 팀 코드를 연달아 복사할 수 있으니
+    // 이전 타이머는 반드시 지운다.
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+    setCopiedId(team.id);
+    copiedTimer.current = setTimeout(() => setCopiedId(null), 1500);
   };
 
-  const handleJoinTeam = () => {
-    if (!inputCode.trim()) {
+  /**
+   * 서버가 팀의 유일한 출처다. 인원 수·상태·초대 코드는 전부 트리거가 만들기
+   * 때문에, 화면에서 미리 계산해두면 서버 값과 어긋난다. 쓰기 뒤에는 항상 다시 읽는다.
+   */
+  const reload = useCallback(async () => {
+    const result = await API.getMyTeams();
+    if (result.code !== 200 || !result.data) {
+      // 401(세션 만료)은 _layout.tsx 가 로그인 화면으로 보내므로 조용히 둔다.
+      if (result.code !== 401) {
+        Alert.alert("오류", result.message ?? "팀 목록을 불러오지 못했어요.");
+      }
+      return;
+    }
+    setMyTeams(result.data);
+  }, [setMyTeams]);
+
+  // 팀을 만들고 돌아오거나, 다른 기기에서 팀원이 들어온 뒤 돌아올 수도 있다.
+  // 탭에 들어올 때마다 다시 읽는다.
+  useFocusEffect(
+    useCallback(() => {
+      let alive = true;
+      (async () => {
+        await reload();
+        if (alive) setIsLoading(false);
+      })();
+      return () => {
+        alive = false;
+      };
+    }, [reload]),
+  );
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await reload();
+    setIsRefreshing(false);
+  };
+
+  const handleDelete = (team: Team) => {
+    // 팀장만 팀을 지울 수 있다(teams_delete 정책). 팀원은 자기 자리만 뺀다.
+    const isOwner = team.isOwner ?? false;
+
+    Alert.alert(
+      isOwner ? "팀을 삭제할까요?" : "팀에서 나갈까요?",
+      isOwner
+        ? "삭제하면 되돌릴 수 없어요. 팀원들도 함께 빠져나가요."
+        : "다시 들어오려면 초대 코드가 필요해요.",
+      [
+        { text: "취소", style: "cancel" },
+        {
+          text: isOwner ? "삭제" : "나가기",
+          style: "destructive",
+          onPress: async () => {
+            const result = isOwner
+              ? await API.deleteTeam(team.id)
+              : await API.leaveTeam(team.id);
+            if (result.code !== 200) {
+              Alert.alert("오류", result.message ?? "처리하지 못했어요.");
+              return;
+            }
+            await reload();
+          },
+        },
+      ],
+    );
+  };
+
+  const handleTogglePublic = async (team: Team, isPublic: boolean) => {
+    const result = await API.setTeamPublic(team.id, isPublic);
+    if (result.code !== 200) {
+      Alert.alert("오류", result.message ?? "상태를 바꾸지 못했어요.");
+      return;
+    }
+    await reload();
+  };
+
+  const handleJoinTeam = async () => {
+    const code = inputCode.trim();
+    if (!code) {
       Alert.alert("초대 코드를 입력해주세요");
       return;
     }
-    if (joinTeamByCode(inputCode)) {
+
+    setIsJoining(true);
+    try {
+      // 코드가 틀렸는지, 정원이 찼는지, 이미 들어간 팀인지는 서버가 구분해서 알려준다.
+      const result = await API.joinTeamByCode(code);
+      if (result.code !== 200 || !result.data) {
+        Alert.alert("참가할 수 없어요", result.message ?? "다시 시도해주세요.");
+        return;
+      }
+
       setJoinModalVisible(false);
       setInputCode("");
-      Alert.alert("참가 완료", `친구 팀(${inputCode.trim()})에 합류했어요.`);
-    } else {
-      Alert.alert(
-        "참가할 수 없어요",
-        "코드가 올바르지 않거나, 이미 가입한 팀이거나, 정원이 다 찼어요.",
-      );
+      await reload();
+      Alert.alert("참가 완료", `${result.data.title} 팀에 합류했어요.`);
+    } finally {
+      setIsJoining(false);
     }
   };
 
   const renderTeamCard = ({ item }: { item: Team }) => {
     const isFull = item.currentCount >= item.count;
     const isPublic = item.status === "ACTIVE";
+    const isMatched = item.status === "MATCHED";
+    const isOwner = item.isOwner ?? false;
     const isExpanded = expandedId === item.id;
+    const isCopied = copiedId === item.id;
     const status = teamStatus(item);
     const progress = Math.min(item.currentCount / item.count, 1);
 
@@ -103,7 +228,8 @@ export default function MyTeamTab() {
           {item.title}
         </Text>
         <Text style={styles.cardMeta}>
-          {item.campus} · {item.dept} · 평균 {item.age}세
+          {item.campus} · {item.dept}
+          {item.age != null && ` · 평균 ${item.age}세`}
         </Text>
 
         {/* 인원 현황을 막대로 보여주면 "몇 명 더 모아야 하는지"가 즉시 읽힌다 */}
@@ -134,23 +260,66 @@ export default function MyTeamTab() {
 
         {isExpanded && (
           <View style={styles.detail}>
-            <View style={styles.codeBox}>
+            {/* 코드가 있을 때만 누를 수 있다. "없음"을 복사해봐야 쓸모가 없다. */}
+            <Pressable
+              onPress={() => handleCopyCode(item)}
+              disabled={!item.inviteCode}
+              style={({ pressed }) => [
+                styles.codeBox,
+                pressed && item.inviteCode && { opacity: 0.7 },
+              ]}
+            >
               <View>
-                <Text style={styles.codeLabel}>초대 코드</Text>
+                <Text style={styles.codeLabel}>
+                  {isCopied ? "코드를 복사했어요" : "초대 코드"}
+                </Text>
                 <Text style={styles.codeValue}>
                   {item.inviteCode || "없음"}
                 </Text>
               </View>
-              <Ionicons
-                name="ticket-outline"
-                size={22}
-                color={Palette.gray400}
-              />
-            </View>
+              {item.inviteCode ? (
+                <View style={styles.copyBtn}>
+                  <Ionicons
+                    name={isCopied ? "checkmark" : "copy-outline"}
+                    size={16}
+                    color={isCopied ? Palette.green : Palette.gray600}
+                  />
+                  <Text
+                    style={[
+                      styles.copyText,
+                      isCopied && { color: Palette.green },
+                    ]}
+                  >
+                    {isCopied ? "복사됨" : "복사"}
+                  </Text>
+                </View>
+              ) : (
+                <Ionicons
+                  name="ticket-outline"
+                  size={22}
+                  color={Palette.gray400}
+                />
+              )}
+            </Pressable>
 
-            {isFull ? (
+            {/*
+              매칭이 끝난 팀은 상태가 잠긴다. 서버도 MATCHED 팀의 상태 변경을
+              거부한다(마이그레이션 009). 여기서 버튼을 감추는 건, 눌러도
+              오류만 나는 길을 보여주지 않으려는 것이다.
+            */}
+            {isMatched && (
+              <View style={styles.lockedBox}>
+                <Ionicons name="heart" size={15} color={Palette.brand} />
+                <Text style={[styles.lockedText, { color: Palette.brandText }]}>
+                  매칭이 성사된 팀이에요. 활동 탭에서 대화를 이어가세요
+                </Text>
+              </View>
+            )}
+
+            {/* 공개 전환은 팀장 몫이다. teams_update 정책도 팀장만 통과시킨다. */}
+            {isOwner && isFull && !isMatched && (
               <Pressable
-                onPress={() => toggleTeamStatus(item.id, !isPublic)}
+                onPress={() => handleTogglePublic(item, !isPublic)}
                 style={({ pressed }) => [
                   styles.primaryAction,
                   isPublic && styles.secondaryAction,
@@ -166,7 +335,9 @@ export default function MyTeamTab() {
                   {isPublic ? "비공개로 돌리기" : "게시판에 등록하기"}
                 </Text>
               </Pressable>
-            ) : (
+            )}
+
+            {isOwner && !isFull && !isMatched && (
               <View style={styles.lockedBox}>
                 <Ionicons
                   name="lock-closed"
@@ -179,36 +350,48 @@ export default function MyTeamTab() {
               </View>
             )}
 
+            {!isOwner && !isMatched && (
+              <View style={styles.lockedBox}>
+                <Ionicons name="people" size={15} color={Palette.gray500} />
+                <Text style={styles.lockedText}>
+                  팀장이 게시판 공개를 결정해요
+                </Text>
+              </View>
+            )}
+
             <View style={styles.manageRow}>
+              {isOwner && (
+                <>
+                  <Pressable
+                    style={styles.manageBtn}
+                    onPress={() => router.push(`/edit/${item.id}` as any)}
+                  >
+                    <Ionicons
+                      name="create-outline"
+                      size={17}
+                      color={Palette.gray600}
+                    />
+                    <Text style={styles.manageText}>정보 수정</Text>
+                  </Pressable>
+
+                  <View style={styles.manageDivider} />
+                </>
+              )}
+
               <Pressable
                 style={styles.manageBtn}
-                onPress={() => router.push(`/edit/${item.id}` as any)}
+                onPress={() => handleDelete(item)}
               >
-                <Ionicons name="create-outline" size={17} color={Palette.gray600} />
-                <Text style={styles.manageText}>정보 수정</Text>
-              </Pressable>
-
-              <View style={styles.manageDivider} />
-
-              <Pressable
-                style={styles.manageBtn}
-                onPress={() => handleDelete(item.id)}
-              >
-                <Ionicons name="trash-outline" size={17} color={Palette.red} />
+                <Ionicons
+                  name={isOwner ? "trash-outline" : "exit-outline"}
+                  size={17}
+                  color={Palette.red}
+                />
                 <Text style={[styles.manageText, { color: Palette.red }]}>
-                  팀 삭제
+                  {isOwner ? "팀 삭제" : "팀 나가기"}
                 </Text>
               </Pressable>
             </View>
-
-            {!isFull && (
-              <Pressable
-                onPress={() => simulateJoinMember(item.id)}
-                style={styles.devBtn}
-              >
-                <Text style={styles.devText}>🧪 (테스트) 친구 입장시키기</Text>
-              </Pressable>
-            )}
           </View>
         )}
       </PressScale>
@@ -241,22 +424,35 @@ export default function MyTeamTab() {
         </PressScale>
       </View>
 
-      <FlatList
-        data={myTeams}
-        renderItem={renderTeamCard}
-        keyExtractor={(item) => item.id.toString()}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.listContent}
-        ListEmptyComponent={
-          <EmptyState
-            icon="people-outline"
-            title="아직 만든 팀이 없어요"
-            description="팀을 만들고 초대 코드로 친구를 부르면 과팅을 시작할 수 있어요."
-            actionLabel="첫 팀 만들기"
-            onAction={() => router.push("/write")}
-          />
-        }
-      />
+      {isLoading ? (
+        <View style={styles.loading}>
+          <ActivityIndicator color={Palette.brand} />
+        </View>
+      ) : (
+        <FlatList
+          data={myTeams}
+          renderItem={renderTeamCard}
+          keyExtractor={(item) => item.id}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={handleRefresh}
+              tintColor={Palette.brand}
+            />
+          }
+          ListEmptyComponent={
+            <EmptyState
+              icon="people-outline"
+              title="아직 만든 팀이 없어요"
+              description="팀을 만들고 초대 코드로 친구를 부르면 과팅을 시작할 수 있어요."
+              actionLabel="첫 팀 만들기"
+              onAction={() => router.push("/write")}
+            />
+          }
+        />
+      )}
 
       {/* 초대 코드 입력: 아래에서 올라오는 시트 */}
       <Modal
@@ -265,53 +461,79 @@ export default function MyTeamTab() {
         animationType="slide"
         onRequestClose={() => setJoinModalVisible(false)}
       >
-        <Pressable
-          style={styles.sheetBackdrop}
-          onPress={() => setJoinModalVisible(false)}
-        />
-        <View style={[styles.sheet, { paddingBottom: insets.bottom + 20 }]}>
-          <View style={styles.sheetHandle} />
-          <Text style={styles.sheetTitle}>초대 코드 입력</Text>
-          <Text style={styles.sheetDesc}>
-            친구에게 받은 6자리 코드를 입력해주세요.
-          </Text>
-
-          <TextInput
-            style={styles.codeInput}
-            placeholder="X7A9Z2"
-            placeholderTextColor={Palette.gray400}
-            value={inputCode}
-            onChangeText={(t) => setInputCode(t.toUpperCase())}
-            autoCapitalize="characters"
-            autoCorrect={false}
-            maxLength={6}
-          />
-
+        {/*
+          시트가 화면 맨 아래에 붙어 있어서 키보드가 올라오면 입력창과 버튼이 그대로 가린다.
+          iOS는 padding으로 시트를 밀어 올리고, Android는 edge-to-edge라 창이 리사이즈되지
+          않으므로 키보드 이벤트로 높이를 계산하는 height 방식을 쓴다.
+        */}
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+        >
           <Pressable
-            onPress={handleJoinTeam}
-            disabled={!inputCode.trim()}
-            style={({ pressed }) => [
-              styles.sheetSubmit,
-              !inputCode.trim() && styles.sheetSubmitDisabled,
-              pressed && { opacity: 0.85 },
+            style={styles.sheetBackdrop}
+            onPress={() => setJoinModalVisible(false)}
+          />
+          <View
+            style={[
+              styles.sheet,
+              // 키보드가 떠 있으면 홈 인디케이터 영역은 가려지므로 그만큼 여백을 뺀다.
+              { paddingBottom: isKeyboardOpen ? 20 : insets.bottom + 20 },
             ]}
           >
-            <Text
-              style={[
-                styles.sheetSubmitText,
-                !inputCode.trim() && { color: Palette.gray400 },
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetTitle}>초대 코드 입력</Text>
+            <Text style={styles.sheetDesc}>
+              친구에게 받은 6자리 코드를 입력해주세요.{"\n"}
+              과팅 팀이라 같은 성별끼리만 모일 수 있어요.
+            </Text>
+
+            <TextInput
+              style={styles.codeInput}
+              placeholder="X7A9Z2"
+              placeholderTextColor={Palette.gray400}
+              value={inputCode}
+              onChangeText={(t) => setInputCode(t.toUpperCase())}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              maxLength={6}
+              returnKeyType="go"
+              onSubmitEditing={handleJoinTeam}
+            />
+
+            <Pressable
+              onPress={handleJoinTeam}
+              disabled={!inputCode.trim() || isJoining}
+              style={({ pressed }) => [
+                styles.sheetSubmit,
+                (!inputCode.trim() || isJoining) && styles.sheetSubmitDisabled,
+                pressed && { opacity: 0.85 },
               ]}
             >
-              입장하기
-            </Text>
-          </Pressable>
-        </View>
+              {isJoining ? (
+                <ActivityIndicator color={Palette.gray500} />
+              ) : (
+                <Text
+                  style={[
+                    styles.sheetSubmitText,
+                    !inputCode.trim() && { color: Palette.gray400 },
+                  ]}
+                >
+                  입장하기
+                </Text>
+              )}
+            </Pressable>
+          </View>
+        </KeyboardAvoidingView>
       </Modal>
     </Screen>
   );
 }
 
 const styles = StyleSheet.create({
+  flex: { flex: 1 },
+  loading: { flex: 1, alignItems: "center", justifyContent: "center" },
+
   actionRow: {
     flexDirection: "row",
     gap: Spacing.md,
@@ -407,6 +629,23 @@ const styles = StyleSheet.create({
     color: Palette.gray900,
     marginTop: 2,
   },
+  copyBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    borderRadius: Radius.sm,
+    backgroundColor: Palette.white,
+    borderWidth: 1,
+    borderColor: Colors.light.border,
+  },
+  copyText: {
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: -0.2,
+    color: Palette.gray600,
+  },
 
   primaryAction: {
     paddingVertical: Spacing.lg,
@@ -455,9 +694,6 @@ const styles = StyleSheet.create({
     color: Palette.gray600,
   },
   manageDivider: { width: 1, height: 14, backgroundColor: Palette.gray200 },
-
-  devBtn: { alignItems: "center", paddingVertical: Spacing.xs },
-  devText: { fontSize: 12, color: Palette.gray400 },
 
   sheetBackdrop: { flex: 1, backgroundColor: "rgba(25,31,40,0.45)" },
   sheet: {
