@@ -63,7 +63,11 @@ const MENU_ITEMS: {
   /** 눌렀을 때 이동할 화면. 없으면 아직 준비 중인 메뉴 */
   route?: string;
 }[] = [
-  { icon: "notifications-outline", label: "알림 설정" },
+  {
+    icon: "notifications-outline",
+    label: "알림 설정",
+    route: "/settings/notifications",
+  },
   { icon: "shield-checkmark-outline", label: "학생증 재인증" },
   { icon: "ban-outline", label: "차단 목록", route: "/settings/blocked" },
   { icon: "document-text-outline", label: "이용약관" },

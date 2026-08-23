@@ -1,7 +1,7 @@
 // 파일: app/post/[id].tsx
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -38,6 +38,7 @@ export default function PostDetail() {
 
   const posts = useStore((state) => state.posts);
   const myTeams = useStore((state) => state.myTeams);
+  const setMyTeams = useStore((state) => state.setMyTeams);
 
   const targetPost = posts.find((p) => p.id.toString() === id);
   const [modalVisible, setModalVisible] = useState(false);
@@ -45,6 +46,36 @@ export default function PostDetail() {
   const [selectedMember, setSelectedMember] = useState<TeamMember | null>(
     null,
   );
+  /** 내 팀 목록을 아직 읽는 중 / 읽지 못했음 */
+  const [isLoadingTeams, setIsLoadingTeams] = useState(true);
+  const [teamsFailed, setTeamsFailed] = useState(false);
+
+  /**
+   * 내 팀 목록은 [내 팀] 탭이 화면에 들어올 때 채운다. 그런데 여기는 홈에서
+   * 바로 들어올 수 있어서, 앱을 켜자마자 신청을 누르면 팀이 있는데도
+   * myTeams 가 비어 있다 — "팀이 없어요" 가 그래서 떴다.
+   * 신청은 이 화면의 본론이니 목록을 직접 읽는다. 겸사겸사 인원 수·상태도
+   * 최신값이 되어, 아래 검사들이 오래된 값으로 판단하지 않는다.
+   */
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const result = await API.getMyTeams();
+      if (!alive) return;
+      if (result.code === 200 && result.data) {
+        setMyTeams(result.data);
+      } else if (result.code !== 401) {
+        // 401(세션 만료)은 _layout.tsx 가 로그인 화면으로 보낸다.
+        // 그 밖의 실패는 '팀이 없다'와 구분해야 한다 — 있는 팀을 없다고
+        // 말하면 사용자는 팀을 하나 더 만들러 간다.
+        setTeamsFailed(true);
+      }
+      setIsLoadingTeams(false);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [setMyTeams]);
 
   if (!targetPost) {
     return (
@@ -58,6 +89,16 @@ export default function PostDetail() {
   }
 
   const handlePressRequest = () => {
+    if (isLoadingTeams) return;
+
+    if (teamsFailed) {
+      Alert.alert(
+        "잠시 후 다시 시도해주세요",
+        "내 팀 목록을 불러오지 못했어요.",
+      );
+      return;
+    }
+
     if (myTeams.length === 0) {
       Alert.alert("팀이 없어요!", "먼저 [내 팀] 탭에서 팀을 만들어주세요.");
       return;
@@ -220,8 +261,16 @@ export default function PostDetail() {
 
       {/* ── 하단 신청 버튼 ───────────────────────────────── */}
       <View style={[styles.footer, { paddingBottom: insets.bottom + Spacing.lg }]}>
-        <PressScale style={styles.requestButton} onPress={handlePressRequest}>
-          <Text style={styles.reqBtnText}>이 팀에게 과팅 신청하기 👋</Text>
+        <PressScale
+          style={[styles.requestButton, isLoadingTeams && styles.requestButtonBusy]}
+          disabled={isLoadingTeams}
+          onPress={handlePressRequest}
+        >
+          {isLoadingTeams ? (
+            <ActivityIndicator color={Palette.white} />
+          ) : (
+            <Text style={styles.reqBtnText}>이 팀에게 과팅 신청하기 👋</Text>
+          )}
         </PressScale>
       </View>
 
@@ -399,7 +448,11 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
     borderRadius: Radius.lg,
     alignItems: "center",
+    // 스피너와 글자의 높이가 달라 버튼이 들썩이지 않게 고정한다
+    justifyContent: "center",
+    minHeight: 56,
   },
+  requestButtonBusy: { opacity: 0.7 },
   reqBtnText: { color: Palette.white, fontSize: 17, fontWeight: "700" },
 
   flexShrink: { flex: 1 },

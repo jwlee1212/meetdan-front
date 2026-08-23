@@ -19,7 +19,11 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR"
+      ]
     },
     "web": {
       "output": "static",
@@ -45,11 +49,24 @@
         {
           "calendarPermission": "확정된 미팅 약속을 캘린더에 저장하기 위해 접근 권한이 필요해요."
         }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#3288FF"
+        }
       ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "8f69d946-250c-40cb-a296-fcda74442f98"
+      }
+    },
+    "owner": "dlwodnek"
   }
 }

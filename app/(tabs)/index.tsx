@@ -38,6 +38,8 @@ export default function HomeTab() {
   const posts = useStore((state) => state.posts);
   const setPosts = useStore((state) => state.setPosts);
   const currentUser = useStore((state) => state.currentUser);
+  const unreadCount = useStore((state) => state.unreadCount);
+  const setUnreadCount = useStore((state) => state.setUnreadCount);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -59,7 +61,18 @@ export default function HomeTab() {
    * 내 팀 제외)는 전부 API.getPosts 안에서 정해지므로 여기서 더 거르지 않는다.
    */
   const reload = useCallback(async () => {
-    const result = await API.getPosts();
+    // 안 읽은 알림 개수도 같이 물어본다. 평소에는 Realtime 구독(_layout.tsx)이
+    // 뱃지를 실시간으로 올리지만, 앱이 백그라운드에 있는 동안 구독이 끊겼다
+    // 붙으면 그 사이 도착한 알림을 놓친다. 홈에 돌아올 때마다 한 번씩 맞춘다.
+    const [result, unread] = await Promise.all([
+      API.getPosts(),
+      API.getUnreadNotificationCount(),
+    ]);
+
+    if (unread.code === 200 && unread.data !== undefined) {
+      setUnreadCount(unread.data);
+    }
+
     if (result.code !== 200 || !result.data) {
       // 401(세션 만료)은 _layout.tsx 가 로그인 화면으로 보내므로 조용히 둔다.
       if (result.code !== 401) {
@@ -68,7 +81,7 @@ export default function HomeTab() {
       return;
     }
     setPosts(result.data);
-  }, [setPosts]);
+  }, [setPosts, setUnreadCount]);
 
   // 다른 팀이 방금 공개됐을 수도, 내가 신청한 팀이 매칭되어 내려갔을 수도 있다.
   // 탭에 들어올 때마다 다시 읽는다.
@@ -147,13 +160,18 @@ export default function HomeTab() {
           <Pressable
             hitSlop={8}
             style={styles.iconButton}
-            onPress={() => router.push("/temp/temp_notification" as any)}
+            onPress={() => router.push("/notifications" as any)}
           >
             <Ionicons
-              name="notifications-outline"
+              name={
+                unreadCount > 0 ? "notifications" : "notifications-outline"
+              }
               size={24}
-              color={Palette.gray800}
+              color={unreadCount > 0 ? Palette.brand : Palette.gray800}
             />
+            {/* 개수까지 적지 않는다. 몇 개인지는 들어가서 보면 되고,
+                작은 점 하나가 "뭔가 있다"를 가장 조용히 말한다. */}
+            {unreadCount > 0 && <View style={styles.unreadDot} />}
           </Pressable>
         }
       />
@@ -219,6 +237,18 @@ export default function HomeTab() {
 
 const styles = StyleSheet.create({
   iconButton: { padding: 4 },
+  unreadDot: {
+    position: "absolute",
+    top: 3,
+    right: 3,
+    width: 8,
+    height: 8,
+    borderRadius: Radius.full,
+    backgroundColor: Palette.red,
+    // 아이콘 획과 점이 붙어 보이지 않게 배경색으로 한 겹 띄운다
+    borderWidth: 1.5,
+    borderColor: Palette.white,
+  },
 
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
 

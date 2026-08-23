@@ -2,8 +2,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as Calendar from "expo-calendar";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Animated,
   Dimensions,
@@ -20,7 +21,14 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { API } from "@/api/client";
+import {
+  API,
+  newMessageId,
+  type ChatMessage,
+  type ChatParticipant,
+  // 이 화면의 컴포넌트 이름이 ChatRoom 이라 타입은 다른 이름으로 받는다
+  type ChatRoom as ChatRoomInfo,
+} from "@/api/client";
 import { Badge } from "@/components/ui/badge";
 import {
   BottomSheet,
@@ -41,6 +49,7 @@ import {
 } from "@/constants/theme";
 import {
   ConfirmedPlan,
+  Match,
   REPORT_REASONS,
   ReportReason,
   useStore,
@@ -58,81 +67,25 @@ import {
 } from "@/utils/profanity";
 
 /* ------------------------------------------------------------------ */
-/* 타입 / 목데이터                                                      */
+/* 타입 / 상수                                                          */
 /* ------------------------------------------------------------------ */
 
-type Message = {
-  id: string;
-  text: string;
-  sender: "me" | "them" | "system";
-  /** them 메시지가 어느 참여자의 것인지 (차단·신고에 쓰인다) */
-  senderId?: string;
-  time: string;
-  type?: "text" | "proposal";
-};
-
-type Participant = {
-  id: string;
-  name: string;
-  dept: string;
-  team: "MINE" | "PARTNER";
-  isLeader?: boolean;
-};
-
 /**
- * 사람 목록은 아직 목업이다. 다만 소속 학과만큼은 실제 매칭된 팀을 따라가야
- * 해서, 이 배열은 뼈대로만 쓰고 화면에서 팀 정보를 덧입힌다.
+ * 화면에 그리는 메시지.
+ *
+ * 서버 모양(ChatMessage)에 '내 것이냐'만 덧붙인 것이다. 같은 줄을 두 사람이
+ * 서로 반대로 봐야 해서 그 판단은 서버가 아니라 여기서 한다.
+ *
+ * pending / failed 는 서버에 없는 값이다. 보내는 중인 말풍선을 먼저 그려두고
+ * (낙관적 전송) 결과에 따라 지우거나 표시를 바꾼다.
  */
-const BASE_PARTICIPANTS: Participant[] = [
-  { id: "u_me", name: "나", dept: "경영학과", team: "MINE", isLeader: true },
-  { id: "u_hm", name: "손흥민", dept: "경영학과", team: "MINE" },
-  { id: "u_cr", name: "호날두", dept: "경영학과", team: "MINE" },
-  {
-    id: "u_ksh",
-    name: "이형빈",
-    dept: "시각디자인",
-    team: "PARTNER",
-    isLeader: true,
-  },
-  { id: "u_gks", name: "고경수", dept: "시각디자인", team: "PARTNER" },
-  { id: "u_hr", name: "최우혁", dept: "시각디자인", team: "PARTNER" },
-];
-
-const MOCK_MESSAGES: Message[] = [
-  {
-    id: "1",
-    text: "매칭이 성사되었어요! 🎉 이제 대화를 시작해보세요.",
-    sender: "system",
-    time: "",
-  },
-  {
-    id: "2",
-    text: "안녕하세요! 시티팝 좋아하세요? 제가 또 시티팝 계정 운영하고 있어서 ㅋㅋ",
-    sender: "them",
-    senderId: "u_ksh",
-    time: "오후 12:01",
-  },
-  {
-    id: "3",
-    text: "야 윤형아 너 이상형 치어리더 아니냐?",
-    sender: "them",
-    senderId: "u_ksh",
-    time: "오후 12:01",
-  },
-  {
-    id: "4",
-    text: "아 네.. 안녕하세요..ㅎㅎ",
-    sender: "me",
-    time: "오후 12:02",
-  },
-  {
-    id: "5",
-    text: "빨리 보고싶어요 :)",
-    sender: "them",
-    senderId: "u_gks",
-    time: "오후 12:03",
-  },
-];
+type ChatItem = ChatMessage & {
+  mine: boolean;
+  pending?: boolean;
+  failed?: boolean;
+  /** 차단·신고 결과처럼 나에게만 보여야 하는 안내. 서버로 가지 않는다. */
+  localOnly?: boolean;
+};
 
 const REASON_LABEL = Object.fromEntries(
   REPORT_REASONS.map((r) => [r.value, r.label]),
@@ -140,17 +93,53 @@ const REASON_LABEL = Object.fromEntries(
 
 const DRAWER_WIDTH = Math.min(320, Dimensions.get("window").width * 0.84);
 
-const formatTime = (d: Date) => {
+/** 한 번에 읽어오는 메시지 수. 서버 인덱스도 이 방향(최신순)으로 걸려 있다. */
+const PAGE_SIZE = 50;
+
+const formatTime = (iso: string) => {
+  const d = new Date(iso);
   const h = d.getHours();
   const period = h < 12 ? "오전" : "오후";
   const hour12 = h % 12 === 0 ? 12 : h % 12;
   return `${period} ${hour12}:${String(d.getMinutes()).padStart(2, "0")}`;
 };
 
-const todayLabel = () => {
-  const d = new Date();
-  const days = ["일", "월", "화", "수", "목", "금", "토"];
-  return `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 ${days[d.getDay()]}요일`;
+const DAY_NAMES = ["일", "월", "화", "수", "목", "금", "토"];
+
+const dayLabel = (iso: string) => {
+  const d = new Date(iso);
+  return `${d.getFullYear()}년 ${d.getMonth() + 1}월 ${d.getDate()}일 ${DAY_NAMES[d.getDay()]}요일`;
+};
+
+const isSameDay = (a: string, b: string) => {
+  const x = new Date(a);
+  const y = new Date(b);
+  return (
+    x.getFullYear() === y.getFullYear() &&
+    x.getMonth() === y.getMonth() &&
+    x.getDate() === y.getDate()
+  );
+};
+
+/**
+ * 메시지를 합친다. 항상 '최신이 배열 앞'으로 정렬한다(inverted FlatList).
+ *
+ * 같은 id 는 나중 것이 이긴다 — 낙관적으로 그려둔 내 말풍선이 Realtime 으로
+ * 돌아온 진짜 행으로 덮여 사라지는 것도, 종료 제안 카드의 결정(UPDATE)이
+ * 반영되는 것도 이 한 줄이 처리한다.
+ *
+ * 정렬은 문자열이 아니라 시각으로 비교한다. 서버가 주는 ISO 는
+ * "...123456+00:00", 낙관적으로 만든 것은 "...123Z" 라 글자로 견주면
+ * 같은 초 안에서 순서가 뒤집힌다.
+ */
+const mergeMessages = (prev: ChatItem[], incoming: ChatItem[]): ChatItem[] => {
+  const byId = new Map(prev.map((m) => [m.id, m]));
+  for (const message of incoming) byId.set(message.id, message);
+
+  return [...byId.values()].sort((a, b) => {
+    const diff = Date.parse(b.createdAt) - Date.parse(a.createdAt);
+    return diff !== 0 ? diff : b.id.localeCompare(a.id);
+  });
 };
 
 /* ------------------------------------------------------------------ */
@@ -163,30 +152,40 @@ export default function ChatRoom() {
   const { id } = useLocalSearchParams<{ id: string }>();
 
   const {
+    currentUser,
     matches,
     posts,
     myTeams,
     matchedTeams,
     blockedUsers,
-    submitReport,
+    setBlockedUsers,
     blockUser,
     unblockUser,
     setConfirmedPlan,
     clearConfirmedPlan,
   } = useStore();
 
-  const [messages, setMessages] = useState<Message[]>(MOCK_MESSAGES);
+  const [messages, setMessages] = useState<ChatItem[]>([]);
+  const [participants, setParticipants] = useState<ChatParticipant[]>([]);
+  const [room, setRoom] = useState<ChatRoomInfo | null>(null);
+  /** 첫 화면을 그릴 만큼 읽어왔는가 */
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  /** 더 읽어올 과거가 남아 있는가 */
+  const [hasOlder, setHasOlder] = useState(true);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+
   const [inputText, setInputText] = useState("");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [planSheetOpen, setPlanSheetOpen] = useState(false);
   /** 점 세 개를 눌렀을 때 뜨는 액션 시트의 대상 */
-  const [actionTarget, setActionTarget] = useState<Participant | null>(null);
+  const [actionTarget, setActionTarget] = useState<ChatParticipant | null>(null);
   /** 신고 시트의 대상. 방 신고면 ROOM */
   const [reportTarget, setReportTarget] = useState<
-    { type: "USER"; user: Participant } | { type: "ROOM" } | null
+    { type: "USER"; user: ChatParticipant } | { type: "ROOM" } | null
   >(null);
 
-  const listRef = useRef<FlatList<Message>>(null);
+  const listRef = useRef<FlatList<ChatItem>>(null);
 
   // 키보드가 올라오면 홈 인디케이터 영역은 키보드에 가려진다.
   // 그때도 insets.bottom을 그대로 두면 입력창이 키보드 위로 붕 뜬다.
@@ -208,7 +207,7 @@ export default function ChatRoom() {
   }, []);
 
   // 시트가 닫히는 애니메이션 동안 내용이 비어버리지 않게 마지막 대상을 붙잡아 둔다
-  const lastAction = useRef<Participant | null>(null);
+  const lastAction = useRef<ChatParticipant | null>(null);
   if (actionTarget) lastAction.current = actionTarget;
   const actionSheetUser = actionTarget ?? lastAction.current;
 
@@ -216,8 +215,33 @@ export default function ChatRoom() {
   if (reportTarget) lastReport.current = reportTarget;
   const reportSheetTarget = reportTarget ?? lastReport.current;
 
-  // 채팅방 id는 매칭 id다. (예전 경로로 팀 id를 들고 들어오는 경우만 아래에서 받아준다)
-  const match = useMemo(() => matches.find((m) => m.id === id), [matches, id]);
+  /* ---------------- 매칭 / 방 ---------------- */
+
+  // 경로의 id 는 매칭 id 다. 방 id(chat_rooms.id)는 아래에서 서버에 물어본다.
+  const storeMatch = useMemo(
+    () => matches.find((m) => m.id === id),
+    [matches, id],
+  );
+
+  /**
+   * 활동 탭을 거치지 않고 바로 들어온 경우(알림, 앱 재시작) 스토어가 비어 있다.
+   * 그때만 매칭 한 줄을 직접 읽는다.
+   */
+  const [fetchedMatch, setFetchedMatch] = useState<Match | null>(null);
+  const match = storeMatch ?? fetchedMatch;
+
+  useEffect(() => {
+    if (storeMatch || fetchedMatch) return;
+    let alive = true;
+    API.getMatch(String(id)).then((result) => {
+      if (alive && result.code === 200 && result.data) {
+        setFetchedMatch(result.data);
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [id, storeMatch, fetchedMatch]);
 
   const roomTitle = useMemo(() => {
     if (match) return match.partnerTeamName;
@@ -225,10 +249,10 @@ export default function ChatRoom() {
     return team?.title ?? "대화 상대를 찾을 수 없음";
   }, [id, match, posts]);
 
-  // 매칭에 묶인 실제 팀. 학과·인원수를 여기서 가져온다.
+  // 매칭에 묶인 실제 팀. 정원(3:3 표기)을 여기서 가져온다.
   // 매칭이 성사되면 게시판에서 내려가므로 보관함(matchedTeams)까지 본다.
   const findTeam = (teamId?: string) =>
-    teamId === undefined
+    teamId === undefined || teamId === ""
       ? undefined
       : (posts.find((p) => p.id === teamId) ??
         myTeams.find((t) => t.id === teamId) ??
@@ -244,16 +268,6 @@ export default function ChatRoom() {
     [blockedUsers],
   );
 
-  const participants = useMemo<Participant[]>(
-    () =>
-      BASE_PARTICIPANTS.map((p) => ({
-        ...p,
-        dept:
-          (p.team === "PARTNER" ? partnerTeam?.dept : myTeam?.dept) ?? p.dept,
-      })),
-    [partnerTeam?.dept, myTeam?.dept],
-  );
-
   const partnerMembers = participants.filter((p) => p.team === "PARTNER");
   const myMembers = participants.filter((p) => p.team === "MINE");
 
@@ -264,67 +278,257 @@ export default function ChatRoom() {
       })`
     : roomTitle;
 
+  /* ---------------- 불러오기 ---------------- */
+
+  /** 서버 모양에 '내 것이냐'만 덧붙인다. 같은 줄을 두 사람이 반대로 본다. */
+  const toItem = useCallback(
+    (message: ChatMessage): ChatItem => ({
+      ...message,
+      mine: !!message.senderId && message.senderId === currentUser?.id,
+    }),
+    [currentUser?.id],
+  );
+
+  useEffect(() => {
+    let alive = true;
+
+    (async () => {
+      setLoading(true);
+      setLoadError(null);
+
+      // 방을 먼저 찾아야 메시지를 물어볼 수 있다(경로는 매칭 id 만 들고 온다)
+      const roomResult = await API.getChatRoom(String(id));
+      if (!alive) return;
+
+      if (roomResult.code !== 200 || !roomResult.data) {
+        setLoadError(roomResult.message ?? "채팅방을 열 수 없어요.");
+        setLoading(false);
+        return;
+      }
+      setRoom(roomResult.data);
+
+      const [messageResult, participantResult, blockedResult] =
+        await Promise.all([
+          API.getChatMessages(roomResult.data.id, { limit: PAGE_SIZE }),
+          API.getChatParticipants(String(id)),
+          API.getBlockedUsers(),
+        ]);
+      if (!alive) return;
+
+      if (messageResult.code === 200) {
+        const rows = messageResult.data ?? [];
+        setMessages(rows.map(toItem));
+        setHasOlder(rows.length === PAGE_SIZE);
+      } else {
+        setLoadError(messageResult.message ?? "대화를 불러오지 못했어요.");
+      }
+
+      if (participantResult.code === 200) {
+        setParticipants(participantResult.data ?? []);
+      }
+
+      // 차단 목록은 못 읽어도 대화는 열린다. 진짜 차단은 서버가 하고
+      // (차단한 상대의 메시지는 아예 안 내려온다) 이 목록은 이미 그려진
+      // 말풍선을 가리는 용도라서다.
+      if (blockedResult.code === 200) {
+        setBlockedUsers(blockedResult.data ?? []);
+      }
+
+      setLoading(false);
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [id, toItem, setBlockedUsers]);
+
+  /**
+   * 실시간 구독.
+   *
+   * INSERT 만 듣지 않는다. 종료 제안 카드의 결정은 그 메시지의 UPDATE 로
+   * 찍히므로, 그걸 안 들으면 제안을 보낸 쪽 화면이 영영 대기 상태로 남는다.
+   * 내가 보낸 메시지도 되돌아오지만 id 가 같아 낙관적 말풍선을 덮을 뿐이다.
+   */
+  useEffect(() => {
+    if (!room) return;
+    return API.subscribeToChatRoom(room.id, ({ message }) => {
+      setMessages((prev) => mergeMessages(prev, [toItem(message)]));
+    });
+  }, [room, toItem]);
+
+  /** 위로 스크롤해서 과거를 더 부른다 (inverted 리스트라 onEndReached 가 위쪽이다) */
+  const loadOlder = useCallback(async () => {
+    if (!room || loadingOlder || !hasOlder) return;
+
+    // 로컬 안내(차단·신고)와 아직 못 보낸 말풍선은 서버에 없다.
+    // 그걸 커서로 쓰면 클라이언트 시각을 기준으로 물어보게 되어 페이지가 어긋난다.
+    const oldest = [...messages]
+      .reverse()
+      .find((m) => !m.localOnly && !m.pending && !m.failed);
+    if (!oldest) return;
+
+    setLoadingOlder(true);
+    const result = await API.getChatMessages(room.id, {
+      before: oldest.createdAt,
+      limit: PAGE_SIZE,
+    });
+
+    if (result.code === 200) {
+      const rows = result.data ?? [];
+      setMessages((prev) => mergeMessages(prev, rows.map(toItem)));
+      setHasOlder(rows.length === PAGE_SIZE);
+    }
+    setLoadingOlder(false);
+  }, [room, loadingOlder, hasOlder, messages, toItem]);
+
+  /**
+   * 종료된 방인가.
+   *
+   * chat_rooms 는 Realtime 발행 대상이 아니라서 상대가 동의해도 방 행의
+   * 변화는 안 내려온다. 대신 그 동의는 제안 메시지의 UPDATE 로 오므로
+   * 그걸 함께 본다.
+   */
+  const roomClosed = useMemo(
+    () =>
+      !!room?.closedAt ||
+      messages.some(
+        (m) => m.kind === "proposal" && m.proposalResult === "ACCEPT",
+      ),
+    [room?.closedAt, messages],
+  );
+
   /* ---------------- 메시지 ---------------- */
 
-  const appendSystemMessage = (text: string) =>
-    setMessages((prev) => [
-      ...prev,
-      { id: `sys_${Date.now()}`, text, sender: "system", time: "" },
-    ]);
+  /** 나에게만 보이는 안내. 차단·신고는 상대에게 알려선 안 된다. */
+  const appendLocalNotice = (text: string) =>
+    setMessages((prev) =>
+      mergeMessages(prev, [
+        {
+          id: `local_${Date.now()}`,
+          roomId: room?.id ?? "",
+          senderId: null,
+          kind: "system",
+          text,
+          isFiltered: false,
+          createdAt: new Date().toISOString(),
+          mine: false,
+          localOnly: true,
+        },
+      ]),
+    );
 
-  const sendMessage = () => {
+  /**
+   * 낙관적으로 그려둔 말풍선 하나를 실제로 보낸다.
+   * 실패해도 같은 id 로 다시 보내면 서버가 중복으로 넣지 않는다.
+   */
+  const deliver = async (roomId: string, messageId: string, text: string) => {
+    const result = await API.sendChatMessage(roomId, text, messageId);
+
+    if (result.code === 200 && result.data) {
+      setMessages((prev) => mergeMessages(prev, [toItem(result.data!)]));
+      return result.code;
+    }
+
+    // 422 = 금지어. 서버에는 아무것도 남지 않았으므로 말풍선을 지운다.
+    if (result.code === 422) {
+      setMessages((prev) => prev.filter((m) => m.id !== messageId));
+      Alert.alert(
+        PROFANITY_ALERT_TITLE,
+        result.message ?? PROFANITY_ALERT_MESSAGE,
+      );
+      return result.code;
+    }
+
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId ? { ...m, pending: false, failed: true } : m,
+      ),
+    );
+    return result.code;
+  };
+
+  const sendMessage = async () => {
     const text = inputText.trim();
-    if (!text) return;
+    if (!text || !room) return;
 
-    // 걸리면 전송하지 않고 입력값도 그대로 둔다. 고쳐서 다시 보내면 된다.
+    if (roomClosed) {
+      Alert.alert("종료된 채팅방이에요", "더 이상 메시지를 보낼 수 없어요.");
+      return;
+    }
+
+    // 서버(filter-message)가 한 번 더 본다. 여기서 먼저 걸러 왕복을 아낄 뿐이다.
     if (hasProfanity(text)) {
       Alert.alert(PROFANITY_ALERT_TITLE, PROFANITY_ALERT_MESSAGE);
       return;
     }
 
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: Date.now().toString(),
-        text,
-        sender: "me",
-        time: formatTime(new Date()),
-      },
-    ]);
+    // id 를 먼저 만들어 두면 Realtime 으로 돌아온 진짜 행이 이 말풍선을
+    // 그대로 덮는다. 임시 id 를 바꿔치기할 필요가 없다.
+    const messageId = newMessageId();
+    setMessages((prev) =>
+      mergeMessages(prev, [
+        {
+          id: messageId,
+          roomId: room.id,
+          senderId: currentUser?.id ?? null,
+          kind: "user",
+          text,
+          isFiltered: false,
+          createdAt: new Date().toISOString(),
+          mine: true,
+          pending: true,
+        },
+      ]),
+    );
     setInputText("");
+    listRef.current?.scrollToOffset({ offset: 0, animated: true });
+
+    const code = await deliver(room.id, messageId, text);
+    // 금지어로 지워졌으면 고쳐 보낼 수 있게 입력값을 돌려준다
+    if (code === 422) setInputText(text);
   };
 
-  const sendExitProposal = () => {
+  const retrySend = (item: ChatItem) => {
+    if (!room) return;
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === item.id ? { ...m, pending: true, failed: false } : m,
+      ),
+    );
+    deliver(room.id, item.id, item.text);
+  };
+
+  const sendExitProposal = async () => {
     setDrawerOpen(false);
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: `proposal_${Date.now()}`,
-        text: "",
-        sender: "system",
-        time: "",
-        type: "proposal",
-      },
-    ]);
+    if (!room) return;
+
+    const result = await API.postExitProposal(room.id);
+    if (result.code !== 200) {
+      Alert.alert("오류", result.message ?? "종료 제안을 보내지 못했어요.");
+    }
+    // 카드 자체는 Realtime INSERT 로 양쪽에 함께 뜬다. 미리 그리지 않는다.
   };
 
-  const handleProposalDecision = (decision: "ACCEPT" | "REJECT") => {
+  const handleProposalDecision = async (
+    message: ChatItem,
+    decision: "ACCEPT" | "REJECT",
+  ) => {
+    const result = await API.resolveExitProposal(message.id, decision);
+    if (result.code !== 200) {
+      Alert.alert("오류", result.message ?? "처리하지 못했어요.");
+      return;
+    }
+
+    // 카드의 결정 표시는 Realtime UPDATE 로 양쪽에 반영된다.
     if (decision === "ACCEPT") {
-      Alert.alert("채팅 종료", "양쪽 팀장의 동의로 채팅방이 종료되었어요.", [
+      setRoom((prev) =>
+        prev ? { ...prev, closedAt: new Date().toISOString() } : prev,
+      );
+      Alert.alert("채팅 종료", "양쪽의 동의로 채팅방이 종료되었어요.", [
         { text: "확인", onPress: () => router.replace("/(tabs)") },
       ]);
-    } else {
-      appendSystemMessage("상대 팀이 종료 제안을 거절했어요.");
     }
   };
-
-  useEffect(() => {
-    const t = setTimeout(
-      () => listRef.current?.scrollToEnd({ animated: true }),
-      120,
-    );
-    return () => clearTimeout(t);
-  }, [messages]);
 
   /* ---------------- 약속 확정 ---------------- */
 
@@ -346,10 +550,16 @@ export default function ChatRoom() {
     }
 
     setConfirmedPlan(String(id), next, roomTitle);
+    setFetchedMatch((prev) => (prev ? { ...prev, confirmedPlan: next } : prev));
     setPlanSheetOpen(false);
-    appendSystemMessage(
-      `${plan ? "약속이 변경되었어요." : "약속이 확정되었어요."}\n${formatPlanSummary(next)}`,
-    );
+
+    // 약속 안내는 양쪽에 남아야 한다. 화면 state 에만 쌓으면 나에게만 보인다.
+    if (room) {
+      await API.postSystemMessage(
+        room.id,
+        `${plan ? "약속이 변경되었어요." : "약속이 확정되었어요."}\n${formatPlanSummary(next)}`,
+      );
+    }
   };
 
   const handleRemovePlan = async () => {
@@ -362,8 +572,12 @@ export default function ChatRoom() {
     }
 
     clearConfirmedPlan(String(id));
+    setFetchedMatch((prev) =>
+      prev ? { ...prev, confirmedPlan: undefined } : prev,
+    );
     setPlanSheetOpen(false);
-    appendSystemMessage("확정된 약속을 취소했어요.");
+
+    if (room) await API.postSystemMessage(room.id, "확정된 약속을 취소했어요.");
   };
 
   /** 기기에 쓸 수 있는 캘린더 하나를 고른다. (iOS 기본 캘린더 → 수정 가능한 것 순) */
@@ -444,7 +658,7 @@ export default function ChatRoom() {
   const afterSheetClose = (fn: () => void) =>
     setTimeout(fn, Platform.OS === "ios" ? 350 : 0);
 
-  const openReportForUser = (user: Participant) => {
+  const openReportForUser = (user: ChatParticipant) => {
     setActionTarget(null);
     afterSheetClose(() => setReportTarget({ type: "USER", user }));
   };
@@ -454,7 +668,35 @@ export default function ChatRoom() {
     setReportTarget({ type: "ROOM" });
   };
 
-  const confirmBlock = (user: Participant) => {
+  /**
+   * 차단은 서버에 먼저 쓴다. 성공해야 화면과 스토어를 고친다 —
+   * 반대로 하면 실패했을 때 '차단한 줄 알았는데 상대 메시지가 계속 오는'
+   * 상태가 된다. 차단·해제 안내는 나에게만 보이는 로컬 메시지다
+   * (상대에게 "내가 차단당했다"를 알려선 안 된다).
+   */
+  const applyBlock = async (user: ChatParticipant) => {
+    const result = await API.blockUser({
+      id: user.id,
+      name: user.name,
+      dept: user.dept,
+      roomId: room?.id,
+    });
+
+    if (result.code !== 200) {
+      Alert.alert("오류", result.message ?? "차단하지 못했어요.");
+      return false;
+    }
+
+    blockUser({
+      id: user.id,
+      name: user.name,
+      dept: user.dept,
+      roomId: room?.id,
+    });
+    return true;
+  };
+
+  const confirmBlock = (user: ChatParticipant) => {
     setActionTarget(null);
     afterSheetClose(() =>
       Alert.alert(
@@ -465,14 +707,10 @@ export default function ChatRoom() {
           {
             text: "차단하기",
             style: "destructive",
-            onPress: () => {
-              blockUser({
-                id: user.id,
-                name: user.name,
-                dept: user.dept,
-                roomId: id,
-              });
-              appendSystemMessage(`${user.name} 님을 차단했어요.`);
+            onPress: async () => {
+              if (await applyBlock(user)) {
+                appendLocalNotice(`${user.name} 님을 차단했어요.`);
+              }
             },
           },
         ],
@@ -480,13 +718,30 @@ export default function ChatRoom() {
     );
   };
 
-  const handleUnblock = (user: Participant) => {
+  const handleUnblock = async (user: ChatParticipant) => {
     setActionTarget(null);
+
+    const result = await API.unblockUser(user.id);
+    if (result.code !== 200) {
+      Alert.alert("오류", result.message ?? "차단을 해제하지 못했어요.");
+      return;
+    }
+
     unblockUser(user.id);
-    appendSystemMessage(`${user.name} 님의 차단을 해제했어요.`);
+    appendLocalNotice(`${user.name} 님의 차단을 해제했어요.`);
+
+    // 차단 동안 서버가 걸러낸 메시지는 화면에도 없다. 다시 읽어와야 보인다.
+    if (room) {
+      const refreshed = await API.getChatMessages(room.id, {
+        limit: PAGE_SIZE,
+      });
+      if (refreshed.code === 200) {
+        setMessages((prev) => mergeMessages(prev, (refreshed.data ?? []).map(toItem)));
+      }
+    }
   };
 
-  const handleReportSubmit = ({
+  const handleReportSubmit = async ({
     reason,
     detail,
     alsoBlock,
@@ -495,38 +750,40 @@ export default function ChatRoom() {
     detail: string;
     alsoBlock: boolean;
   }) => {
-    if (!reportTarget) return;
+    if (!reportTarget || !room) return;
 
     const isUser = reportTarget.type === "USER";
     const targetName = isUser ? reportTarget.user.name : roomTitle;
 
-    const accepted = submitReport({
+    // 방 신고의 대상은 매칭이 아니라 채팅방이다(reports.room_id 는 chat_rooms 참조)
+    const result = await API.submitReport({
       targetType: isUser ? "USER" : "ROOM",
-      targetId: isUser ? reportTarget.user.id : String(id),
-      targetName,
+      targetId: isUser ? reportTarget.user.id : room.id,
       reason,
       detail,
-      roomId: String(id),
+      roomId: room.id,
     });
 
-    if (isUser && alsoBlock) {
-      const { user } = reportTarget;
-      blockUser({ id: user.id, name: user.name, dept: user.dept, roomId: id });
-    }
+    const blocked =
+      isUser && alsoBlock && result.code === 200
+        ? await applyBlock(reportTarget.user)
+        : false;
 
     setReportTarget(null);
 
     afterSheetClose(() => {
-      if (!accepted) {
-        Alert.alert(
-          "이미 접수된 신고예요",
-          "같은 대상에 대한 신고가 이미 접수되어 처리 중이에요.",
-        );
+      if (result.code === 409) {
+        Alert.alert("이미 접수된 신고예요", result.message!);
         return;
       }
-      appendSystemMessage(
+      if (result.code !== 200) {
+        Alert.alert("오류", result.message ?? "신고를 접수하지 못했어요.");
+        return;
+      }
+
+      appendLocalNotice(
         `${targetName} 신고가 접수되었어요. (사유: ${REASON_LABEL[reason]})` +
-          (isUser && alsoBlock ? `\n${targetName} 님을 차단했어요.` : ""),
+          (blocked ? `\n${targetName} 님을 차단했어요.` : ""),
       );
       Alert.alert(
         "신고가 접수되었어요",
@@ -537,38 +794,64 @@ export default function ChatRoom() {
 
   /* ---------------- 렌더 ---------------- */
 
-  const renderItem = ({ item, index }: { item: Message; index: number }) => {
-    if (item.type === "proposal") {
-      return <ProposalCard onDecide={handleProposalDecision} />;
-    }
+  const renderItem = ({ item, index }: { item: ChatItem; index: number }) => {
+    // inverted 리스트라 배열 앞이 화면 아래다. 위에 붙는 이웃은 index + 1.
+    const older = messages[index + 1];
+    const newer = messages[index - 1];
 
-    if (item.sender === "system") {
+    // 날짜가 바뀌는 지점에만 구분선을 넣는다. 가장 오래된 줄 위에는 항상.
+    const dateDivider = (!older || !isSameDay(older.createdAt, item.createdAt)) && (
+      <View style={styles.dateRow}>
+        <Text style={styles.dateText}>{dayLabel(item.createdAt)}</Text>
+      </View>
+    );
+
+    if (item.kind === "proposal") {
       return (
-        <View style={styles.systemRow}>
-          <Text style={styles.systemText}>{item.text}</Text>
+        <View>
+          {dateDivider}
+          <ProposalCard
+            result={item.proposalResult}
+            onDecide={(decision) => handleProposalDecision(item, decision)}
+          />
         </View>
       );
     }
 
-    const isMe = item.sender === "me";
-    const prev = messages[index - 1];
-    const next = messages[index + 1];
+    if (item.kind === "system") {
+      return (
+        <View>
+          {dateDivider}
+          <View style={styles.systemRow}>
+            <Text style={styles.systemText}>{item.text}</Text>
+          </View>
+        </View>
+      );
+    }
+
+    const isMe = item.mine;
 
     // 같은 사람이 연달아 보낸 말풍선은 이름·시간을 한 번만 보여준다
     const sameAsPrev =
-      !!prev && prev.sender === item.sender && prev.senderId === item.senderId;
+      !!older && older.kind === "user" && older.senderId === item.senderId;
     const sameAsNext =
-      !!next && next.sender === item.sender && next.senderId === item.senderId;
-    const showHeader = !isMe && !sameAsPrev;
-    const showTime = !sameAsNext || next?.time !== item.time;
+      !!newer && newer.kind === "user" && newer.senderId === item.senderId;
+    const showHeader = !isMe && (!sameAsPrev || !!dateDivider);
+    const showTime =
+      !sameAsNext || formatTime(newer.createdAt) !== formatTime(item.createdAt);
 
     const sender = participants.find((p) => p.id === item.senderId);
     const isBlockedSender = !!item.senderId && blockedIds.has(item.senderId);
 
     return (
       <View
-        style={[styles.messageBlock, sameAsPrev && styles.messageBlockTight]}
+        style={[
+          styles.messageBlock,
+          sameAsPrev && !dateDivider && styles.messageBlockTight,
+        ]}
       >
+        {dateDivider}
+
         {showHeader && !!sender && (
           <Text style={styles.senderName}>
             {sender.name}
@@ -591,41 +874,66 @@ export default function ChatRoom() {
             </View>
           )}
 
-          {isBlockedSender ? (
-            <View style={styles.blockedBubble}>
-              <Ionicons
-                name="eye-off-outline"
-                size={14}
-                color={Palette.gray500}
-              />
-              <Text style={styles.blockedText}>차단한 사용자의 메시지예요</Text>
-            </View>
-          ) : (
-            <Pressable
-              onLongPress={() => sender && setActionTarget(sender)}
-              delayLongPress={300}
-              disabled={isMe}
-              style={({ pressed }) => [
-                styles.bubble,
-                isMe ? styles.myBubble : styles.theirBubble,
-                showHeader && !isMe && styles.theirBubbleFirst,
-                isMe && !sameAsPrev && styles.myBubbleFirst,
-                pressed && !isMe && { opacity: 0.85 },
-              ]}
-            >
-              <Text style={[styles.bubbleText, isMe && styles.myBubbleText]}>
-                {item.text}
-              </Text>
-            </Pressable>
-          )}
+          {/*
+            말풍선과 시각을 세로로 쌓는다. 한 줄에 나란히 두면 시각이 가로
+            공간을 가져가서 그만큼 말풍선이 좁아진다(글자가 일찍 줄바꿈된다).
+          */}
+          <View style={[styles.bubbleColumn, isMe && styles.bubbleColumnMine]}>
+            {isBlockedSender ? (
+              <View style={styles.blockedBubble}>
+                <Ionicons
+                  name="eye-off-outline"
+                  size={14}
+                  color={Palette.gray500}
+                />
+                <Text style={styles.blockedText}>
+                  차단한 사용자의 메시지예요
+                </Text>
+              </View>
+            ) : (
+              <Pressable
+                // 보내다 실패한 말풍선은 눌러서 다시 보낸다.
+                onPress={item.failed ? () => retrySend(item) : undefined}
+                onLongPress={() => sender && setActionTarget(sender)}
+                delayLongPress={300}
+                disabled={isMe && !item.failed}
+                style={({ pressed }) => [
+                  styles.bubble,
+                  isMe ? styles.myBubble : styles.theirBubble,
+                  showHeader && !isMe && styles.theirBubbleFirst,
+                  isMe && !sameAsPrev && styles.myBubbleFirst,
+                  item.pending && styles.bubblePending,
+                  item.failed && styles.bubbleFailed,
+                  pressed && (!isMe || item.failed) && { opacity: 0.85 },
+                ]}
+              >
+                <Text style={[styles.bubbleText, isMe && styles.myBubbleText]}>
+                  {item.text}
+                </Text>
+              </Pressable>
+            )}
 
-          {showTime && <Text style={styles.timeText}>{item.time}</Text>}
+            {item.failed ? (
+              <Text style={styles.failedText}>전송 실패 · 눌러서 재시도</Text>
+            ) : (
+              showTime &&
+              !item.pending && (
+                <Text style={styles.timeText}>{formatTime(item.createdAt)}</Text>
+              )
+            )}
+          </View>
         </View>
       </View>
     );
   };
 
-  const canSend = inputText.trim().length > 0;
+  const canSend = inputText.trim().length > 0 && !!room && !roomClosed;
+
+  // 둘 중 하나만 바뀌어도 목록을 다시 그려야 한다 (renderItem 이 이웃을 본다)
+  const listExtraData = useMemo(
+    () => ({ messages, blockedIds }),
+    [messages, blockedIds],
+  );
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
@@ -667,79 +975,132 @@ export default function ChatRoom() {
         // 헤더 높이를 오프셋으로 더하면 그만큼 입력창이 키보드에서 떨어진다.
         keyboardVerticalOffset={0}
       >
-        <FlatList
-          ref={listRef}
-          data={messages}
-          renderItem={renderItem}
-          keyExtractor={(item) => item.id}
-          // 차단하면 이미 그려진 말풍선도 즉시 가려져야 한다
-          extraData={blockedUsers}
-          style={styles.list}
-          contentContainerStyle={styles.listContent}
-          showsVerticalScrollIndicator={false}
-          keyboardDismissMode="on-drag"
-          ListHeaderComponent={
-            <View style={styles.dateRow}>
-              <Text style={styles.dateText}>{todayLabel()}</Text>
-            </View>
-          }
-        />
-
-        <View
-          style={[
-            styles.inputBar,
-            {
-              paddingBottom: keyboardUp
-                ? Spacing.md
-                : Math.max(insets.bottom, Spacing.md),
-            },
-          ]}
-        >
-          <TextInput
-            style={styles.input}
-            value={inputText}
-            onChangeText={setInputText}
-            placeholder="메시지 보내기"
-            placeholderTextColor={Palette.gray400}
-            multiline
-            returnKeyType="send"
-            onSubmitEditing={sendMessage}
-            blurOnSubmit={false}
+        {loading ? (
+          <View style={styles.centerBox}>
+            <ActivityIndicator color={Palette.brand} />
+          </View>
+        ) : loadError ? (
+          <View style={styles.centerBox}>
+            <Ionicons
+              name="chatbubble-ellipses-outline"
+              size={32}
+              color={Palette.gray300}
+            />
+            <Text style={styles.centerText}>{loadError}</Text>
+          </View>
+        ) : (
+          <FlatList
+            ref={listRef}
+            // 최신이 배열 앞이고, inverted 가 그걸 화면 아래로 뒤집는다.
+            // 새 메시지가 와도 스크롤을 건드릴 필요가 없고, 과거 불러오기는
+            // onEndReached(= 위로 끝까지) 하나로 끝난다.
+            inverted
+            data={messages}
+            renderItem={renderItem}
+            keyExtractor={(item) => item.id}
+            /*
+             * 각 줄이 위아래 이웃을 보고 그려진다(이름·시각을 언제 보여줄지).
+             * 새 메시지가 들어오면 그 위 줄의 판단도 바뀌므로 목록 전체가 다시
+             * 그려져야 한다. 차단도 마찬가지 — 이미 그려진 말풍선이 즉시 가려져야 한다.
+             */
+            extraData={listExtraData}
+            style={styles.list}
+            contentContainerStyle={styles.listContent}
+            showsVerticalScrollIndicator={false}
+            keyboardDismissMode="on-drag"
+            onEndReached={loadOlder}
+            onEndReachedThreshold={0.4}
+            ListFooterComponent={
+              loadingOlder ? (
+                <View style={styles.olderSpinner}>
+                  <ActivityIndicator size="small" color={Palette.gray400} />
+                </View>
+              ) : null
+            }
+            ListEmptyComponent={
+              <View style={[styles.centerBox, styles.emptyFlip]}>
+                <Text style={styles.centerText}>
+                  매칭이 성사되었어요! 🎉{"\n"}먼저 인사를 건네보세요.
+                </Text>
+              </View>
+            }
           />
+        )}
 
-          {/* 대화 내용과 무관하게 언제든 약속을 잡을 수 있게 상시 노출 */}
-          <Pressable
-            onPress={() => setPlanSheetOpen(true)}
-            accessibilityLabel="약속 잡기"
-            style={({ pressed }) => [
-              styles.planButton,
-              !!plan && styles.planButtonActive,
-              pressed && { opacity: 0.7 },
+        {roomClosed ? (
+          <View
+            style={[
+              styles.closedBar,
+              { paddingBottom: Math.max(insets.bottom, Spacing.md) },
             ]}
           >
             <Ionicons
-              name={plan ? "calendar" : "calendar-outline"}
-              size={20}
-              color={plan ? Palette.brand : Palette.gray600}
+              name="lock-closed-outline"
+              size={16}
+              color={Palette.gray500}
             />
-          </Pressable>
-
-          <Pressable
-            onPress={sendMessage}
-            disabled={!canSend}
-            style={({ pressed }) => [
-              styles.sendButton,
-              !canSend && styles.sendButtonOff,
-              pressed && canSend && { opacity: 0.85 },
+            <Text style={styles.closedText}>
+              종료된 채팅방이에요. 지난 대화는 계속 볼 수 있어요.
+            </Text>
+          </View>
+        ) : (
+          <View
+            style={[
+              styles.inputBar,
+              {
+                paddingBottom: keyboardUp
+                  ? Spacing.md
+                  : Math.max(insets.bottom, Spacing.md),
+              },
             ]}
           >
-            <Ionicons
-              name="arrow-up"
-              size={20}
-              color={canSend ? Palette.white : Palette.gray400}
+            <TextInput
+              style={styles.input}
+              value={inputText}
+              onChangeText={setInputText}
+              placeholder="메시지 보내기"
+              placeholderTextColor={Palette.gray400}
+              multiline
+              returnKeyType="send"
+              onSubmitEditing={sendMessage}
+              blurOnSubmit={false}
+              editable={!!room}
             />
-          </Pressable>
-        </View>
+
+            {/* 대화 내용과 무관하게 언제든 약속을 잡을 수 있게 상시 노출 */}
+            <Pressable
+              onPress={() => setPlanSheetOpen(true)}
+              accessibilityLabel="약속 잡기"
+              style={({ pressed }) => [
+                styles.planButton,
+                !!plan && styles.planButtonActive,
+                pressed && { opacity: 0.7 },
+              ]}
+            >
+              <Ionicons
+                name={plan ? "calendar" : "calendar-outline"}
+                size={20}
+                color={plan ? Palette.brand : Palette.gray600}
+              />
+            </Pressable>
+
+            <Pressable
+              onPress={sendMessage}
+              disabled={!canSend}
+              style={({ pressed }) => [
+                styles.sendButton,
+                !canSend && styles.sendButtonOff,
+                pressed && canSend && { opacity: 0.85 },
+              ]}
+            >
+              <Ionicons
+                name="arrow-up"
+                size={20}
+                color={canSend ? Palette.white : Palette.gray400}
+              />
+            </Pressable>
+          </View>
+        )}
       </KeyboardAvoidingView>
 
       <ChatDrawer
@@ -749,6 +1110,7 @@ export default function ChatRoom() {
         myMembers={myMembers}
         partnerMembers={partnerMembers}
         blockedIds={blockedIds}
+        roomClosed={roomClosed}
         onPressMember={setActionTarget}
         onReportRoom={openReportForRoom}
         onManageBlocked={() => {
@@ -917,9 +1279,18 @@ function PlanBanner({
 /* 종료 제안 카드                                                       */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 이미 답한 제안은 결과만 남긴다. 답은 서버(messages.proposal_result)에
+ * 저장되고 Realtime UPDATE 로 양쪽 화면에 함께 반영된다.
+ *
+ * ⚠️ 제안에는 보낸 사람이 없다(kind='proposal' 은 sender_id 가 null).
+ *    그래서 제안한 쪽 화면에도 같은 버튼이 보인다.
+ */
 function ProposalCard({
+  result,
   onDecide,
 }: {
+  result?: "ACCEPT" | "REJECT";
   onDecide: (d: "ACCEPT" | "REJECT") => void;
 }) {
   return (
@@ -930,30 +1301,39 @@ function ProposalCard({
         </View>
         <Text style={styles.proposalTitle}>채팅 종료 제안</Text>
         <Text style={styles.proposalText}>
-          상대 팀장이 대화 종료를 제안했어요.{"\n"}동의하면 채팅방이 사라져요.
+          대화 종료가 제안되었어요.{"\n"}동의하면 채팅방이 사라져요.
         </Text>
-        <View style={styles.proposalButtons}>
-          <Pressable
-            style={({ pressed }) => [
-              styles.proposalBtn,
-              styles.proposalReject,
-              pressed && { opacity: 0.7 },
-            ]}
-            onPress={() => onDecide("REJECT")}
-          >
-            <Text style={styles.proposalRejectText}>더 대화할래요</Text>
-          </Pressable>
-          <Pressable
-            style={({ pressed }) => [
-              styles.proposalBtn,
-              styles.proposalAccept,
-              pressed && { opacity: 0.85 },
-            ]}
-            onPress={() => onDecide("ACCEPT")}
-          >
-            <Text style={styles.proposalAcceptText}>동의</Text>
-          </Pressable>
-        </View>
+
+        {result ? (
+          <Text style={styles.proposalResult}>
+            {result === "ACCEPT"
+              ? "동의로 채팅이 종료되었어요."
+              : "더 대화하기로 했어요."}
+          </Text>
+        ) : (
+          <View style={styles.proposalButtons}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.proposalBtn,
+                styles.proposalReject,
+                pressed && { opacity: 0.7 },
+              ]}
+              onPress={() => onDecide("REJECT")}
+            >
+              <Text style={styles.proposalRejectText}>더 대화할래요</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [
+                styles.proposalBtn,
+                styles.proposalAccept,
+                pressed && { opacity: 0.85 },
+              ]}
+              onPress={() => onDecide("ACCEPT")}
+            >
+              <Text style={styles.proposalAcceptText}>동의</Text>
+            </Pressable>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -967,10 +1347,12 @@ interface DrawerProps {
   open: boolean;
   onClose: () => void;
   roomTitle: string;
-  myMembers: Participant[];
-  partnerMembers: Participant[];
+  myMembers: ChatParticipant[];
+  partnerMembers: ChatParticipant[];
   blockedIds: Set<string>;
-  onPressMember: (p: Participant) => void;
+  /** 종료된 방에서는 다시 종료를 제안할 수 없다 */
+  roomClosed: boolean;
+  onPressMember: (p: ChatParticipant) => void;
   onReportRoom: () => void;
   onManageBlocked: () => void;
   onExitProposal: () => void;
@@ -983,6 +1365,7 @@ function ChatDrawer({
   myMembers,
   partnerMembers,
   blockedIds,
+  roomClosed,
   onPressMember,
   onReportRoom,
   onManageBlocked,
@@ -1006,7 +1389,7 @@ function ChatDrawer({
     outputRange: [DRAWER_WIDTH, 0],
   });
 
-  const renderMember = (p: Participant, actionable: boolean) => {
+  const renderMember = (p: ChatParticipant, actionable: boolean) => {
     const blocked = blockedIds.has(p.id);
     return (
       <Pressable
@@ -1071,7 +1454,10 @@ function ChatDrawer({
             <Text style={styles.roomName} numberOfLines={1}>
               {roomTitle}
             </Text>
-            <Badge label="매칭 진행 중" tone="success" />
+            <Badge
+              label={roomClosed ? "종료된 채팅" : "매칭 진행 중"}
+              tone={roomClosed ? "neutral" : "success"}
+            />
           </View>
 
           <Text style={styles.drawerSection}>
@@ -1105,14 +1491,16 @@ function ChatDrawer({
             { paddingBottom: insets.bottom + Spacing.lg },
           ]}
         >
-          <PressScale
-            scaleTo={0.97}
-            style={styles.exitButton}
-            onPress={onExitProposal}
-          >
-            <Ionicons name="log-out-outline" size={18} color={Palette.red} />
-            <Text style={styles.exitButtonText}>채팅방 종료 제안</Text>
-          </PressScale>
+          {!roomClosed && (
+            <PressScale
+              scaleTo={0.97}
+              style={styles.exitButton}
+              onPress={onExitProposal}
+            >
+              <Ionicons name="log-out-outline" size={18} color={Palette.red} />
+              <Text style={styles.exitButtonText}>채팅방 종료 제안</Text>
+            </PressScale>
+          )}
         </View>
       </Animated.View>
     </View>
@@ -1229,13 +1617,55 @@ const styles = StyleSheet.create({
   },
 
   list: { flex: 1, backgroundColor: Palette.gray50 },
+  // inverted 리스트라 위아래가 뒤집힌다. paddingTop 이 화면 아래에 붙으므로
+  // 예전과 같은 여백을 얻으려면 두 값을 서로 바꿔 둬야 한다.
   listContent: {
     paddingHorizontal: Spacing.lg,
-    paddingTop: Spacing.md,
-    paddingBottom: Spacing.xl,
+    paddingTop: Spacing.xl,
+    paddingBottom: Spacing.md,
   },
 
-  dateRow: { alignItems: "center", marginBottom: Spacing.lg },
+  centerBox: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.md,
+    padding: Spacing.xl,
+    backgroundColor: Palette.gray50,
+  },
+  /**
+   * inverted 리스트는 목록 전체를 뒤집어 그린다. 각 줄은 다시 뒤집혀
+   * 제대로 보이지만 ListEmptyComponent 는 그 보정을 받지 못해 글자가
+   * 거꾸로 선다. 그 자리에만 한 번 더 뒤집어 준다.
+   */
+  emptyFlip: { transform: [{ scaleY: -1 }] },
+  centerText: {
+    ...Typo.caption,
+    fontSize: 13,
+    color: Palette.gray500,
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  olderSpinner: { paddingVertical: Spacing.lg, alignItems: "center" },
+
+  closedBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: Spacing.sm,
+    paddingHorizontal: Spacing.lg,
+    paddingTop: Spacing.md,
+    backgroundColor: Palette.gray100,
+    borderTopWidth: Hairline.height,
+    borderTopColor: Palette.gray200,
+  },
+  closedText: { ...Typo.caption, fontSize: 12, color: Palette.gray600 },
+
+  dateRow: {
+    alignItems: "center",
+    marginTop: Spacing.sm,
+    marginBottom: Spacing.lg,
+  },
   dateText: {
     ...Typo.caption,
     fontSize: 12,
@@ -1272,12 +1702,22 @@ const styles = StyleSheet.create({
     marginBottom: 4,
   },
 
+  /**
+   * 아바타 | (말풍선 + 시각) 두 칸짜리 행.
+   *
+   * flex-start 인 이유: 아바타는 말풍선 묶음의 첫 줄 옆에 서야 한다.
+   * flex-end 로 두면 아래에 붙은 시각만큼 아바타가 같이 내려간다.
+   * 말풍선 꼬리(theirBubbleFirst)도 위쪽 모서리라 위 정렬이 맞다.
+   */
   bubbleRow: {
     flexDirection: "row",
-    alignItems: "flex-end",
-    gap: Spacing.xs,
+    alignItems: "flex-start",
   },
   bubbleRowMine: { justifyContent: "flex-end" },
+
+  // 폭 제한은 말풍선이 아니라 이 칸이 진다. 시각도 같은 폭 안에 놓인다.
+  bubbleColumn: { maxWidth: "72%", alignItems: "flex-start" },
+  bubbleColumnMine: { alignItems: "flex-end" },
 
   avatarSlot: { width: 36, marginRight: Spacing.sm },
   avatar: {
@@ -1297,7 +1737,6 @@ const styles = StyleSheet.create({
   },
 
   bubble: {
-    maxWidth: "72%",
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: Radius.lg,
@@ -1317,12 +1756,14 @@ const styles = StyleSheet.create({
     color: Palette.gray900,
   },
   myBubbleText: { color: Palette.white },
+  /** 보내는 중 — 서버가 받았다는 답이 오면 원래 색으로 돌아온다 */
+  bubblePending: { opacity: 0.6 },
+  bubbleFailed: { backgroundColor: Palette.gray400 },
 
   blockedBubble: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    maxWidth: "72%",
     paddingHorizontal: 14,
     paddingVertical: 10,
     borderRadius: Radius.lg,
@@ -1334,10 +1775,18 @@ const styles = StyleSheet.create({
     color: Palette.gray500,
   },
 
+  // 말풍선 아래에 붙는다. marginHorizontal 은 말풍선 모서리와 붙지 않게.
   timeText: {
     fontSize: 11,
     color: Palette.gray400,
-    marginBottom: 2,
+    marginTop: 3,
+    marginHorizontal: 4,
+  },
+  failedText: {
+    fontSize: 11,
+    color: Palette.red,
+    marginTop: 3,
+    marginHorizontal: 4,
   },
 
   inputBar: {
@@ -1410,6 +1859,13 @@ const styles = StyleSheet.create({
     lineHeight: 19,
     marginTop: 6,
     marginBottom: Spacing.lg,
+  },
+  proposalResult: {
+    ...Typo.caption,
+    fontSize: 12,
+    fontWeight: "700",
+    color: Palette.gray600,
+    marginTop: Spacing.sm,
   },
   proposalButtons: { flexDirection: "row", gap: Spacing.sm, width: "100%" },
   proposalBtn: {

@@ -50,6 +50,7 @@ export default function MatchPartyDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
 
   const myTeams = useStore((state) => state.myTeams);
+  const setMyTeams = useStore((state) => state.setMyTeams);
   const setMatches = useStore((state) => state.setMatches);
 
   const [request, setRequest] = useState<MatchRequest | null>(null);
@@ -73,16 +74,31 @@ export default function MatchPartyDetail() {
     setRequest(result.data);
   }, [id, router]);
 
+  /**
+   * 내 팀 목록은 [내 팀] 탭이 채운다. 여기는 활동 탭이나 알림에서 바로 들어올
+   * 수 있어서, 그때는 비어 있어 "어느 팀으로 온 신청인지"를 못 쓴다.
+   *
+   * 신청을 읽는 것과 나란히 돌린다. 순서대로 하면 화면이 그만큼 늦게 뜬다.
+   * 실패해도 조용히 넘어간다 — 이 화면의 본론인 수락·거절은 서버가 신청 하나만
+   * 보고 판단하므로, 머리말 한 줄 때문에 화면을 막을 이유가 없다.
+   */
+  const loadMyTeams = useCallback(async () => {
+    const result = await API.getMyTeams();
+    if (result.code === 200 && result.data) {
+      setMyTeams(result.data);
+    }
+  }, [setMyTeams]);
+
   useEffect(() => {
     let alive = true;
     (async () => {
-      await load();
+      await Promise.all([load(), loadMyTeams()]);
       if (alive) setIsLoading(false);
     })();
     return () => {
       alive = false;
     };
-  }, [load]);
+  }, [load, loadMyTeams]);
 
   /**
    * 수락. 여기서부터는 서버가 다 한다 — 채팅방 생성, 두 팀 MATCHED 전환,

@@ -5,12 +5,21 @@
 // 화면 쪽 분기(`result.code === 200`)를 그대로 쓸 수 있고,
 // Supabase 의 날것 에러 메시지가 사용자에게 새어 나가지 않는다.
 
+import {
+  clearRegisteredPushToken,
+  getRegisteredPushToken,
+} from "@/lib/push";
 import { supabase } from "@/lib/supabase";
 import type {
+  AppNotification,
+  BlockedUser,
   ConfirmedPlan,
   CurrentUser,
   Match,
   MatchRequest,
+  NotificationKind,
+  ReportReason,
+  ReportTargetType,
   Team,
   TeamMember,
 } from "@/store/useStore";
@@ -407,7 +416,7 @@ type TeamRow = {
 };
 
 /** 카드에 찍히는 "방금 전". 서버는 timestamptz 만 주고 표현은 여기서 만든다. */
-const toRelativeTime = (iso: string): string => {
+export const toRelativeTime = (iso: string): string => {
   const minutes = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
   if (minutes < 1) return "방금 전";
   if (minutes < 60) return `${minutes}분 전`;
@@ -613,6 +622,225 @@ const toMatch = (
     },
   };
 };
+
+// ============================================================
+// chat_rooms / messages ↔ ChatMessage 매핑
+//
+// 방 하나는 매칭 하나에 붙어 있다(chat_rooms.match_id 는 unique).
+// 화면 경로는 /chat/[매칭id] 라서 방 id 는 매칭에서 찾아 들어간다.
+// ============================================================
+
+/**
+ * 서버가 올리는 채팅 쪽 문구. send_chat_message(마이그레이션 011) 와
+ * post_system_message / post_exit_proposal / resolve_exit_proposal 이 던진다.
+ */
+const CHAT_ERROR_MESSAGES = [
+  "이 채팅방의 참여자가 아닙니다",
+  "이미 종료된 채팅방입니다",
+  "메시지를 보낼 수 없는 계정입니다",
+  "메시지 id 가 중복되었습니다",
+  "처리할 종료 제안이 없습니다",
+  "잘못된 값입니다",
+];
+
+const describeChatError = (error: { message: string; code?: string }): string => {
+  const known = CHAT_ERROR_MESSAGES.find((m) => error.message.includes(m));
+  if (known) return known;
+
+  /*
+   * 42501 = RLS 위반.
+   * 마이그레이션 011 이후 messages 직접 insert 는 정책(messages_insert_denied)이
+   * 항상 막는다. 여기로 42501 이 올라온다는 건 화면이 Edge Function 을 거치지
+   * 않고 테이블에 직접 쓰려 했다는 뜻이라, 사용자 문구보다 개발자 로그가 중요하다.
+   */
+  if (error.code === "42501") {
+    console.error("[채팅 RLS 거부]", error.message);
+    return "메시지를 보낼 수 없어요. 앱을 최신 버전으로 업데이트해주세요.";
+  }
+
+  return describeDbError(error as PostgrestError);
+};
+
+/** deleted_at 은 안 가져온다. messages_select 가 이미 걸러서 내려준다. */
+const MESSAGE_COLUMNS =
+  "id, room_id, sender_id, kind, content, proposal_result, is_filtered, created_at";
+
+type MessageRow = {
+  id: string;
+  room_id: string;
+  /** system / proposal 메시지는 보낸 사람이 없다 */
+  sender_id: string | null;
+  kind: "user" | "system" | "proposal";
+  content: string;
+  proposal_result: "ACCEPT" | "REJECT" | null;
+  is_filtered: boolean;
+  created_at: string;
+};
+
+/**
+ * 말풍선 하나.
+ *
+ * '내 것이냐 상대 것이냐'는 여기서 정하지 않는다. 화면이 currentUser.id 와
+ * senderId 를 비교해서 정한다 — 같은 줄을 두 사람이 서로 반대로 봐야 하므로
+ * 서버 모양에 그 판단을 섞으면 안 된다.
+ */
+export type ChatMessage = {
+  id: string;
+  roomId: string;
+  senderId: string | null;
+  kind: "user" | "system" | "proposal";
+  text: string;
+  /** 종료 제안 카드의 결정. 아직 아무도 안 눌렀으면 undefined */
+  proposalResult?: "ACCEPT" | "REJECT";
+  /** 금지어가 마스킹된 메시지 (filter-message 가 판단해 기록한다) */
+  isFiltered: boolean;
+  /** ISO 문자열. "오후 12:01" 같은 표현은 화면에서 만든다 */
+  createdAt: string;
+};
+
+const toChatMessage = (row: MessageRow): ChatMessage => ({
+  id: row.id,
+  roomId: row.room_id,
+  senderId: row.sender_id,
+  kind: row.kind,
+  text: row.content,
+  proposalResult: row.proposal_result ?? undefined,
+  isFiltered: row.is_filtered,
+  createdAt: row.created_at,
+});
+
+export type ChatRoom = {
+  id: string;
+  matchId: string;
+  /** 종료 제안에 양쪽이 동의하면 찍힌다. 차 있으면 입력창을 닫아야 한다. */
+  closedAt: string | null;
+};
+
+/** 채팅방 서랍(참여자 목록)이 그리는 한 사람. */
+export type ChatParticipant = {
+  /** profiles.id — messages.sender_id 와 맞춰 쓴다 */
+  id: string;
+  name: string;
+  dept: string;
+  team: "MINE" | "PARTNER";
+  isLeader: boolean;
+  avatarIdx: number;
+};
+
+/** 참여자 목록에 필요한 만큼만. 팀 카드(TEAM_SELECT)와 달리 user_id 가 있어야 한다. */
+const CHAT_TEAM_SELECT =
+  "id, owner_id, title, dept, capacity, team_members(user_id, is_owner, profiles(name, nickname, dept, avatar_idx))";
+
+type ChatTeamRow = {
+  id: string;
+  owner_id: string;
+  title: string;
+  dept: string;
+  capacity: number;
+  team_members:
+    | {
+        user_id: string;
+        is_owner: boolean;
+        /** 차단한 상대는 profiles_select 가 가려서 null 로 온다 */
+        profiles: {
+          name: string;
+          nickname: string | null;
+          dept: string;
+          avatar_idx: number;
+        } | null;
+      }[]
+    | null;
+};
+
+const toParticipants = (
+  team: ChatTeamRow | null,
+  side: "MINE" | "PARTNER",
+): ChatParticipant[] =>
+  (team?.team_members ?? [])
+    // 팀장이 맨 앞. 서랍이 배열 순서대로 그린다.
+    .sort((a, b) => Number(b.is_owner) - Number(a.is_owner))
+    .map((member) => {
+      const nickname = member.profiles?.nickname?.trim();
+      return {
+        id: member.user_id,
+        name: nickname || member.profiles?.name || "밋단 회원",
+        // 프로필이 가려졌으면 팀 학과로 대신한다(팀은 동성·같은 과 기준이라 대개 맞다)
+        dept: member.profiles?.dept ?? team?.dept ?? "",
+        team: side,
+        isLeader: member.is_owner,
+        avatarIdx: member.profiles?.avatar_idx ?? 0,
+      };
+    });
+
+/**
+ * 메시지 id 를 클라이언트가 만든다.
+ *
+ * Realtime 은 내가 보낸 메시지도 되돌려준다. id 가 보내기 전에 정해져 있으면
+ * 화면에 먼저 그려둔 말풍선을 그냥 같은 id 로 덮어쓰면 되어서, 임시 id 를
+ * 실제 id 로 바꿔치는 로직이 통째로 없어진다. 재전송해도 서버가 같은 id 를
+ * 중복으로 넣지 않는다(send_chat_message 의 on conflict).
+ *
+ * Hermes 에는 crypto 가 없을 수 있어 Math.random 으로 물러선다. 이 값은
+ * 비밀이 아니라 '같은 메시지인지' 가리는 꼬리표라 그 정도면 충분하다.
+ */
+export const newMessageId = (): string => {
+  const g = globalThis as {
+    crypto?: { randomUUID?: () => string };
+  };
+  if (typeof g.crypto?.randomUUID === "function") return g.crypto.randomUUID();
+
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
+};
+
+/**
+ * 메시지 전송 창구.
+ *
+ * 마이그레이션 011 이후 messages 직접 insert 는 막혀 있다. 이 함수만이
+ * 금지어를 거른 뒤 서버에 넣을 수 있다(is_filtered / filter_note 도 여기서만
+ * 채워진다). 화면의 utils/profanity 는 왕복 전에 미리 알려주는 편의일 뿐,
+ * 판정의 주인은 이쪽이다.
+ *
+ *   요청 { room_id, content, message_id? }
+ *   응답 { allowed: true, message, was_filtered } | { blocked: true, error }
+ */
+const FILTER_MESSAGE_FN = "filter-message";
+
+// ============================================================
+// notifications ↔ AppNotification 매핑
+//
+// 문구는 서버가 만들어 둔 그대로 나른다(마이그레이션 012). 여기서 하는 일은
+// 컬럼 이름을 카멜케이스로 바꾸고, read_at 을 isRead 로 접는 것뿐이다.
+// ============================================================
+
+const NOTIFICATION_COLUMNS =
+  "id, kind, title, body, team_id, match_id, room_id, read_at, created_at";
+
+type NotificationRow = {
+  id: string;
+  kind: NotificationKind;
+  title: string;
+  body: string;
+  team_id: string | null;
+  match_id: string | null;
+  room_id: string | null;
+  read_at: string | null;
+  created_at: string;
+};
+
+const toNotification = (row: NotificationRow): AppNotification => ({
+  id: row.id,
+  kind: row.kind,
+  title: row.title,
+  body: row.body,
+  teamId: row.team_id ?? undefined,
+  matchId: row.match_id ?? undefined,
+  roomId: row.room_id ?? undefined,
+  isRead: row.read_at !== null,
+  createdAt: row.created_at,
+});
 
 export const API = {
   /** 인증번호 발송 */
@@ -1241,8 +1469,584 @@ export const API = {
     return ok(undefined, "약속을 취소했어요.");
   },
 
+  // ==========================================================
+  // 채팅
+  // ==========================================================
+
+  /**
+   * 매칭 id 로 채팅방을 찾는다. 방은 수락 트리거가 이미 만들어 뒀다.
+   *
+   * closedAt 이 차 있으면 종료된 방이다. 지난 대화는 계속 읽히지만
+   * 새 메시지는 서버가 거절하므로(send_chat_message) 입력창을 닫아야 한다.
+   */
+  getChatRoom: async (matchId: string): Promise<ApiResponse<ChatRoom>> => {
+    const { data, error } = await retryOnClockSkew<{
+      id: string;
+      match_id: string;
+      closed_at: string | null;
+    }>(() =>
+      supabase
+        .from("chat_rooms")
+        .select("id, match_id, closed_at")
+        .eq("match_id", matchId)
+        .maybeSingle(),
+    );
+
+    if (error) return fail(500, describeChatError(error));
+    // 방이 안 보이는 건 대개 '없어서'가 아니라 chat_rooms_select 에 걸려서다
+    if (!data) return fail(404, "채팅방을 찾을 수 없어요.");
+
+    return ok({
+      id: data.id,
+      matchId: data.match_id,
+      closedAt: data.closed_at,
+    });
+  },
+
+  /**
+   * 메시지를 최신순으로 가져온다.
+   *
+   * ⚠️ 정렬이 '최신이 배열 앞'이다. idx_messages_room(room_id, created_at desc)
+   *    을 그대로 타고, inverted FlatList 에 그대로 꽂을 수 있다.
+   *    오래된 순으로 그리려면 화면에서 뒤집는다.
+   *
+   * 과거를 더 불러올 땐 화면에 있는 가장 오래된 메시지의 createdAt 을
+   * before 로 넘긴다. 같은 시각(마이크로초까지)에 두 줄이 들어오면 경계에서
+   * 한 줄이 빠질 수 있는데, 화면이 어차피 id 로 합치므로 실제로는 드러나지 않는다.
+   */
+  getChatMessages: async (
+    roomId: string,
+    options?: { before?: string; limit?: number },
+  ): Promise<ApiResponse<ChatMessage[]>> => {
+    const limit = options?.limit ?? 50;
+
+    const { data, error } = await retryOnClockSkew<MessageRow[]>(() => {
+      let query = supabase
+        .from("messages")
+        .select(MESSAGE_COLUMNS)
+        .eq("room_id", roomId)
+        .order("created_at", { ascending: false })
+        .limit(limit);
+
+      if (options?.before) query = query.lt("created_at", options.before);
+      return query.returns<MessageRow[]>();
+    });
+
+    if (error) return fail(500, describeChatError(error));
+    return ok((data ?? []).map(toChatMessage));
+  },
+
+  /**
+   * 메시지 전송.
+   *
+   * messageId 를 미리 만들어 두고 화면에 말풍선을 먼저 그린 뒤 부르면 된다
+   * (newMessageId). 실패해도 같은 id 로 다시 부르면 중복이 생기지 않는다.
+   *
+   * 금지어에 걸리면 code 422 로 돌아온다. 이때는 서버에 아무것도 남지
+   * 않았으므로 화면은 낙관적으로 그린 말풍선을 지우고 입력값은 그대로 둔다.
+   */
+  sendChatMessage: async (
+    roomId: string,
+    content: string,
+    messageId: string = newMessageId(),
+  ): Promise<ApiResponse<ChatMessage>> => {
+    const text = content.trim();
+    if (!text) return fail(400, "내용을 입력해주세요.");
+
+    const { data, error } = await supabase.functions.invoke(FILTER_MESSAGE_FN, {
+      body: { room_id: roomId, content: text, message_id: messageId },
+    });
+
+    // 금지어 차단은 오류가 아니라 정상적인 거절이라 따로 가른다.
+    if (!error && (data as { blocked?: boolean } | null)?.blocked) {
+      const blocked = data as { error?: string };
+      return fail(422, blocked.error ?? "부적절한 표현이 포함되어 있어요.");
+    }
+
+    const result = readFunctionResult<{
+      allowed?: boolean;
+      message?: MessageRow;
+      was_filtered?: boolean;
+    }>(data, error);
+
+    if (!result.ok) {
+      return fail(400, result.message ?? "메시지를 보내지 못했어요.");
+    }
+    if (!result.data.message) {
+      // 함수는 200 인데 행이 없다 = filter-message 배포본이 낡았다
+      // (마이그레이션 011 이전 버전은 판정만 하고 넣지 않는다)
+      console.error("[채팅] filter-message 가 메시지를 돌려주지 않았습니다");
+      return fail(500, "메시지를 보내지 못했어요.");
+    }
+
+    return ok(toChatMessage(result.data.message));
+  },
+
+  /**
+   * 방 하나를 실시간으로 듣는다. 해지 함수를 돌려준다.
+   *
+   * 다른 함수들과 달리 ApiResponse 봉투를 쓰지 않는다. 한 번 묻고 답을 받는
+   * 호출이 아니라 계속 열려 있는 통로라서, useEffect 의 정리 함수로 그대로
+   * 돌려주는 편이 화면에서 다루기 쉽다.
+   *
+   *   useEffect(() => API.subscribeToChatRoom(roomId, onEvent), [roomId]);
+   *
+   * INSERT 만 듣지 않는 이유: 종료 제안 카드의 결정(proposal_result)은
+   * UPDATE 로 찍힌다. 그걸 안 들으면 제안을 보낸 쪽 화면이 영원히 대기 상태다.
+   *
+   * 구독에도 RLS 가 적용된다. 내가 차단한 사람의 메시지는 애초에 도착하지
+   * 않으므로 화면에서 따로 거를 필요가 없다. 반대로 신고로 삭제된 메시지도
+   * 정책에 걸려 이벤트가 안 오므로, 이미 그려진 말풍선은 다시 들어와야 사라진다.
+   */
+  subscribeToChatRoom: (
+    roomId: string,
+    onEvent: (event: { type: "INSERT" | "UPDATE"; message: ChatMessage }) => void,
+  ): (() => void) => {
+    const filter = `room_id=eq.${roomId}`;
+    const channel = supabase
+      .channel(`room:${roomId}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "messages", filter },
+        (payload) =>
+          onEvent({
+            type: "INSERT",
+            message: toChatMessage(payload.new as MessageRow),
+          }),
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "messages", filter },
+        (payload) =>
+          onEvent({
+            type: "UPDATE",
+            message: toChatMessage(payload.new as MessageRow),
+          }),
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  },
+
+  /**
+   * 채팅방 참여자 6명(3:3 이면).
+   *
+   * 어느 쪽이 '내 팀'인지는 팀원 목록에 내 uuid 가 있는지로 가른다.
+   * 매칭 행을 한 번 읽으면 양쪽 팀원이 다 딸려오므로 따로 더 묻지 않는다.
+   */
+  getChatParticipants: async (
+    matchId: string,
+  ): Promise<ApiResponse<ChatParticipant[]>> => {
+    const userId = await requireUserId();
+    if (!userId) return fail(401, "로그인이 필요합니다.");
+
+    const { data, error } = await retryOnClockSkew<{
+      from_team: ChatTeamRow | null;
+      to_team: ChatTeamRow | null;
+    }>(() =>
+      supabase
+        .from("matches")
+        .select(
+          `from_team:teams!from_team_id(${CHAT_TEAM_SELECT}),
+           to_team:teams!to_team_id(${CHAT_TEAM_SELECT})`,
+        )
+        .eq("id", matchId)
+        .maybeSingle(),
+    );
+
+    if (error) return fail(500, describeChatError(error));
+    if (!data) return fail(404, "매칭을 찾을 수 없어요.");
+
+    const mineIsFrom = (data.from_team?.team_members ?? []).some(
+      (member) => member.user_id === userId,
+    );
+
+    return ok([
+      ...toParticipants(mineIsFrom ? data.from_team : data.to_team, "MINE"),
+      ...toParticipants(mineIsFrom ? data.to_team : data.from_team, "PARTNER"),
+    ]);
+  },
+
+  /**
+   * 시스템 메시지. 약속 확정·차단 안내처럼 '누가 보낸 게 아닌' 줄이다.
+   *
+   * 화면 state 에만 쌓으면 나에게만 보인다. 양쪽에 남아야 하는 안내는
+   * 반드시 이걸 거쳐야 한다.
+   */
+  postSystemMessage: async (
+    roomId: string,
+    text: string,
+  ): Promise<ApiResponse> => {
+    const { error } = await supabase.rpc("post_system_message", {
+      p_room_id: roomId,
+      p_text: text,
+    });
+
+    if (error) return fail(400, describeChatError(error));
+    return ok();
+  },
+
+  /** 채팅 종료 제안 카드를 띄운다. 양쪽 중 누구나 보낼 수 있다. */
+  postExitProposal: async (roomId: string): Promise<ApiResponse> => {
+    const { error } = await supabase.rpc("post_exit_proposal", {
+      p_room_id: roomId,
+    });
+
+    if (error) return fail(400, describeChatError(error));
+    return ok();
+  },
+
+  /**
+   * 종료 제안에 답한다.
+   * ACCEPT 면 서버가 chat_rooms.closed_at 을 찍고 방이 닫힌다.
+   */
+  resolveExitProposal: async (
+    messageId: string,
+    result: "ACCEPT" | "REJECT",
+  ): Promise<ApiResponse> => {
+    const { error } = await supabase.rpc("resolve_exit_proposal", {
+      p_message_id: messageId,
+      p_result: result,
+    });
+
+    if (error) return fail(400, describeChatError(error));
+    return ok();
+  },
+
+  // ==========================================================
+  // 차단 / 신고
+  // ==========================================================
+
+  /**
+   * 차단.
+   *
+   * 이름·학과를 함께 저장하는 게 핵심이다. 차단하는 순간 profiles_select 가
+   * 그 사람을 가려버려서, 스냅샷이 없으면 settings/blocked.tsx 가 이름 없는
+   * 빈 목록이 된다.
+   *
+   * 이미 차단한 상대면 조용히 성공으로 둔다(기본키가 blocker+blocked 라
+   * 그냥 넣으면 23505 가 난다).
+   */
+  blockUser: async (user: {
+    id: string;
+    name: string;
+    dept?: string;
+    /** chat_rooms.id — 어느 방에서 차단했는지 */
+    roomId?: string;
+  }): Promise<ApiResponse> => {
+    const userId = await requireUserId();
+    if (!userId) return fail(401, "로그인이 필요합니다.");
+
+    const { error } = await supabase.from("blocks").upsert(
+      {
+        blocker_id: userId,
+        blocked_id: user.id,
+        room_id: user.roomId ?? null,
+        blocked_name: user.name,
+        blocked_dept: user.dept ?? null,
+      },
+      { onConflict: "blocker_id,blocked_id" },
+    );
+
+    if (error) return fail(400, describeDbError(error));
+    return ok(undefined, "차단했어요.");
+  },
+
+  /** 차단 해제. 가려져 있던 상대의 지난 메시지가 다시 보인다. */
+  unblockUser: async (blockedId: string): Promise<ApiResponse> => {
+    const userId = await requireUserId();
+    if (!userId) return fail(401, "로그인이 필요합니다.");
+
+    const { error } = await supabase
+      .from("blocks")
+      .delete()
+      .eq("blocker_id", userId)
+      .eq("blocked_id", blockedId);
+
+    if (error) return fail(400, describeDbError(error));
+    return ok(undefined, "차단을 해제했어요.");
+  },
+
+  /**
+   * 내가 차단한 사람들 (settings/blocked.tsx)
+   *
+   * blocks_select 정책이 이미 내 것만 내려주지만, 운영자 계정(is_admin)에는
+   * 남의 차단까지 보인다. 목록 화면에서 그게 섞이면 안 되므로 한 번 더 좁힌다.
+   */
+  getBlockedUsers: async (): Promise<ApiResponse<BlockedUser[]>> => {
+    const userId = await requireUserId();
+    if (!userId) return fail(401, "로그인이 필요합니다.");
+
+    const { data, error } = await retryOnClockSkew<
+      {
+        blocked_id: string;
+        blocked_name: string | null;
+        blocked_dept: string | null;
+        room_id: string | null;
+        created_at: string;
+      }[]
+    >(() =>
+      supabase
+        .from("blocks")
+        .select("blocked_id, blocked_name, blocked_dept, room_id, created_at")
+        .eq("blocker_id", userId)
+        .order("created_at", { ascending: false }),
+    );
+
+    if (error) return fail(500, describeDbError(error));
+
+    return ok(
+      (data ?? []).map((row) => ({
+        id: row.blocked_id,
+        name: row.blocked_name ?? "밋단 회원",
+        dept: row.blocked_dept ?? undefined,
+        roomId: row.room_id ?? undefined,
+        blockedAt: toDateLabel(row.created_at),
+      })),
+    );
+  },
+
+  /**
+   * 신고 접수.
+   *
+   * 같은 대상을 같은 방에서 두 번 신고하면 code 409 로 돌아온다
+   * (reports_no_duplicate 유니크 인덱스). 화면은 "이미 접수된 신고예요"를
+   * 보여주면 된다.
+   *
+   * ⚠️ roomId 는 chat_rooms.id 다. 매칭 id 를 넣으면 외래키에 걸린다.
+   */
+  submitReport: async (report: {
+    targetType: ReportTargetType;
+    /** USER 면 profiles.id, ROOM 이면 chat_rooms.id */
+    targetId: string;
+    reason: ReportReason;
+    detail?: string;
+    roomId?: string;
+  }): Promise<ApiResponse> => {
+    const userId = await requireUserId();
+    if (!userId) return fail(401, "로그인이 필요합니다.");
+
+    const { error } = await supabase.from("reports").insert({
+      reporter_id: userId,
+      target_type: report.targetType,
+      target_id: report.targetId,
+      // 제재 대상. 방 신고는 특정인을 지목하지 않는다.
+      target_user_id: report.targetType === "USER" ? report.targetId : null,
+      room_id: report.roomId ?? null,
+      reason: report.reason,
+      detail: report.detail?.trim() || null,
+    });
+
+    if (error) {
+      if (error.code === "23505") {
+        return fail(409, "같은 대상에 대한 신고가 이미 접수되어 처리 중이에요.");
+      }
+      return fail(400, describeDbError(error));
+    }
+
+    return ok(undefined, "신고가 접수되었어요.");
+  },
+
+  // ==========================================================
+  // 알림
+  //
+  // 앱은 읽기만 한다. 알림을 만드는 건 전부 서버 트리거고(마이그레이션 012),
+  // 읽음 표시는 RPC 로만 열려 있다 — notifications 에 직접 쓰는 길은 없다.
+  // ==========================================================
+
+  /**
+   * 알림 목록 (최신순).
+   *
+   * 페이지네이션은 넣지 않았다. 한 사람에게 쌓이는 알림은 매칭 흐름 하나당
+   * 몇 줄뿐이라 50줄이면 몇 주치가 들어온다. 그보다 오래된 알림을 다시
+   * 들춰볼 이유가 생기면 그때 before 커서를 붙이면 된다
+   * (getChatMessages 와 같은 모양으로).
+   */
+  getNotifications: async (
+    limit = 50,
+  ): Promise<ApiResponse<AppNotification[]>> => {
+    const userId = await requireUserId();
+    if (!userId) return fail(401, "로그인이 필요합니다.");
+
+    const { data, error } = await retryOnClockSkew<NotificationRow[]>(() =>
+      supabase
+        .from("notifications")
+        .select(NOTIFICATION_COLUMNS)
+        .order("created_at", { ascending: false })
+        .limit(limit)
+        .returns<NotificationRow[]>(),
+    );
+
+    if (error) return fail(500, describeDbError(error));
+    return ok((data ?? []).map(toNotification));
+  },
+
+  /**
+   * 안 읽은 개수만. 홈 헤더의 빨간 점이 앱을 켜자마자 정확해야 하는데,
+   * 그것 때문에 목록을 통째로 받아올 이유는 없다.
+   * head: true 라 행은 오지 않고 count 만 온다.
+   */
+  getUnreadNotificationCount: async (): Promise<ApiResponse<number>> => {
+    const userId = await requireUserId();
+    if (!userId) return fail(401, "로그인이 필요합니다.");
+
+    const { count, error } = await supabase
+      .from("notifications")
+      .select("id", { count: "exact", head: true })
+      .is("read_at", null);
+
+    if (error) return fail(500, describeDbError(error));
+    return ok(count ?? 0);
+  },
+
+  /** 알림 하나를 읽음으로. 이미 읽은 알림이면 서버가 아무것도 하지 않는다. */
+  markNotificationRead: async (
+    notificationId: string,
+  ): Promise<ApiResponse> => {
+    const { error } = await supabase.rpc("mark_notification_read", {
+      p_id: notificationId,
+    });
+
+    if (error) return fail(400, describeDbError(error));
+    return ok();
+  },
+
+  /** 전부 읽음. 바뀐 줄 수를 돌려준다. */
+  markAllNotificationsRead: async (): Promise<ApiResponse<number>> => {
+    const { data, error } = await supabase.rpc("mark_all_notifications_read");
+
+    if (error) return fail(400, describeDbError(error));
+    return ok((data as number | null) ?? 0);
+  },
+
+  /**
+   * 내 알림함을 실시간으로 듣는다. 해지 함수를 돌려준다
+   * (subscribeToChatRoom 과 같은 모양이다 — useEffect 정리 함수로 바로 쓴다).
+   *
+   * 구독에도 RLS 가 걸려 남의 알림은 애초에 도착하지 않지만, 필터를 걸어
+   * 두면 서버가 내 것만 골라 보내므로 오가는 양이 줄어든다.
+   *
+   * INSERT 만 듣는다. 읽음 표시(UPDATE)는 이 기기가 스스로 한 일이라
+   * 되돌려받을 필요가 없다.
+   */
+  subscribeToNotifications: (
+    userId: string,
+    onNotification: (item: AppNotification) => void,
+  ): (() => void) => {
+    const channel = supabase
+      .channel(`notifications:${userId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "notifications",
+          filter: `user_id=eq.${userId}`,
+        },
+        (payload) => onNotification(toNotification(payload.new as NotificationRow)),
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  },
+
+  /**
+   * 내가 꺼 둔 알림 종류 (설정 화면).
+   *
+   * '켠 것'이 아니라 '끈 것'이 저장된다. 목록에 없으면 받는다는 뜻이라
+   * 처음 들어온 사람은 빈 배열을 받는다 — 그게 '전부 켜짐'이다.
+   */
+  getNotificationMutes: async (): Promise<ApiResponse<NotificationKind[]>> => {
+    const userId = await requireUserId();
+    if (!userId) return fail(401, "로그인이 필요합니다.");
+
+    const { data, error } = await retryOnClockSkew<{ kind: NotificationKind }[]>(
+      () => supabase.from("notification_mutes").select("kind"),
+    );
+
+    if (error) return fail(500, describeDbError(error));
+    return ok((data ?? []).map((row) => row.kind));
+  },
+
+  /**
+   * 알림 종류 켜기 / 끄기.
+   *
+   * 여러 종류를 한 번에 보낸다. 화면의 스위치 하나가 종류 여럿을 묶고 있어서
+   * (예: '매칭 결과' = 성사 + 거절 + 취소) 하나씩 부르면 왕복이 늘어난다.
+   */
+  setNotificationMuted: async (
+    kinds: NotificationKind[],
+    muted: boolean,
+  ): Promise<ApiResponse> => {
+    const { error } = await supabase.rpc("set_notification_mutes", {
+      p_kinds: kinds,
+      p_muted: muted,
+    });
+
+    if (error) return fail(400, describeDbError(error));
+    return ok();
+  },
+
+  // ==========================================================
+  // 푸시 알림 기기 토큰
+  //
+  // 토큰을 얻는 일(권한·발급)은 lib/push.ts 가 하고, 서버에 남기는 일만
+  // 여기서 한다. 알림 자체는 서버가 만들어 보내므로 앱이 할 일은
+  // "이 기기로 보내주세요" 한 줄을 등록해 두는 것뿐이다.
+  // ==========================================================
+
+  /**
+   * 기기 등록. 앱을 켤 때마다 부른다 — 토큰은 재설치·업데이트로 바뀌고,
+   * 같은 기기를 다른 계정이 쓰기 시작했을 수도 있다(그때는 주인만 바뀐다).
+   */
+  savePushToken: async (
+    token: string,
+    platform: "ios" | "android",
+  ): Promise<ApiResponse> => {
+    const { error } = await supabase.rpc("save_push_token", {
+      p_token: token,
+      p_platform: platform,
+    });
+
+    if (error) {
+      // 푸시를 못 켰다고 앱을 막지 않는다. 원인은 콘솔에만 남긴다.
+      console.error("[푸시] 토큰 등록 실패", error);
+      return fail(400, describeDbError(error));
+    }
+    return ok();
+  },
+
+  /** 기기 해제. 로그아웃할 때 부른다 — 안 하면 다음 사용자에게 내 알림이 간다. */
+  removePushToken: async (token: string): Promise<ApiResponse> => {
+    const { error } = await supabase.rpc("delete_push_token", {
+      p_token: token,
+    });
+
+    if (error) {
+      console.error("[푸시] 토큰 해제 실패", error);
+      return fail(400, describeDbError(error));
+    }
+    return ok();
+  },
+
   /** 로그아웃. 세션이 사라지면 _layout.tsx 가 알아서 로그인 화면으로 보낸다. */
   logout: async (): Promise<ApiResponse> => {
+    /*
+     * 세션을 지우기 전에 이 기기의 푸시 등록을 먼저 뗀다.
+     * 순서가 중요하다 — signOut 이 먼저면 RPC 가 인증 없이 나가서 아무것도
+     * 지우지 못하고, 그 기기로는 이전 사용자의 알림이 계속 날아간다.
+     * (실패해도 로그아웃은 계속 진행한다)
+     */
+    const pushToken = getRegisteredPushToken();
+    if (pushToken) {
+      await API.removePushToken(pushToken);
+      clearRegisteredPushToken();
+    }
+
     const { error } = await supabase.auth.signOut();
     if (error) {
       // 서버 호출이 실패해도 기기의 세션은 이미 지워진다. 계속 진행한다.

@@ -114,7 +114,45 @@ export interface BlockedUser {
   blockedAt: string;
 }
 
-// 5. 로그인한 나 자신
+// 5. 알림
+/**
+ * notifications 한 줄. 문구(title/body)는 서버가 만들어 보낸 그대로다.
+ *
+ * 같은 사건을 두 팀이 서로 반대편에서 보기 때문에("우리가 신청했다" vs
+ * "신청이 왔다") 받는 사람 기준으로 문장을 뒤집는 일은 서버가 한 번만 한다.
+ * 여기서 다시 만들면 두 벌이 되고 반드시 어긋난다.
+ *
+ * 대신 '눌렀을 때 어디로 가는가'는 서버가 정하지 않는다. 앱 라우트는 앱이
+ * 바뀔 때마다 바뀌므로 대상 id 만 받아 utils/notifications.ts 가 경로를 만든다.
+ */
+export type NotificationKind =
+  | "MATCH_REQUEST"
+  | "MATCH_ACCEPTED"
+  | "MATCH_REJECTED"
+  | "MATCH_CANCELED"
+  | "TEAM_JOINED"
+  | "TEAM_READY"
+  | "PLAN_SET"
+  | "NOTICE";
+
+export interface AppNotification {
+  /** notifications.id (uuid) */
+  id: string;
+  kind: NotificationKind;
+  title: string;
+  body: string;
+  /** teams.id — 팀 관련 알림에만 */
+  teamId?: string;
+  /** matches.id — 신청·매칭·약속 알림에만 */
+  matchId?: string;
+  /** chat_rooms.id — 매칭이 성사된 뒤의 알림에만 */
+  roomId?: string;
+  isRead: boolean;
+  /** ISO 문자열. "방금 전" 같은 표현은 화면에서 만든다 */
+  createdAt: string;
+}
+
+// 6. 로그인한 나 자신
 /**
  * 로그인/재시작 시 서버에서 받아오는 내 정보. Supabase profiles 한 줄과 1:1이다.
  * 화면 곳곳(프로필, 팀 생성, 초대 코드 참여)이 여기 한 곳만 보게 한다.
@@ -162,6 +200,18 @@ interface AppState {
   reports: Report[];
   blockedUsers: BlockedUser[];
 
+  /** 알림 센터 목록. 화면에 들어갈 때 서버에서 다시 읽는다. */
+  notifications: AppNotification[];
+  /**
+   * 안 읽은 알림 개수 (홈 헤더 종 아이콘의 빨간 점).
+   *
+   * notifications 에서 세지 않고 따로 들고 있다. 목록은 알림 화면에 들어가야
+   * 채워지는데, 뱃지는 앱을 켜자마자 정확해야 하기 때문이다. 앱 시작 시
+   * 개수만 따로 물어보고(getUnreadNotificationCount), 그 뒤로는 Realtime 과
+   * 읽음 처리가 이 숫자를 함께 움직인다.
+   */
+  unreadCount: number;
+
   setCurrentUser: (user: CurrentUser) => void;
   /** 로그아웃 시 호출. 다음 계정에 이전 유저 정보가 새지 않게 한다. */
   clearCurrentUser: () => void;
@@ -205,9 +255,31 @@ interface AppState {
 
   /** 신고 접수. 같은 대상을 중복 신고하면 false를 돌려준다. */
   submitReport: (report: Omit<Report, "id" | "createdAt">) => boolean;
+  /**
+   * 서버(blocks)에서 읽어온 차단 목록으로 갈아끼운다.
+   *
+   * 진짜 차단은 서버가 한다 — messages_select 정책이 차단한 상대의 메시지를
+   * 아예 안 내려준다. 이 목록은 '이미 화면에 그려진 말풍선을 가리는' 용도와
+   * 차단 목록 화면에만 쓰인다. 그래서 앱을 켤 때마다 서버에서 다시 읽어야 한다.
+   */
+  setBlockedUsers: (users: BlockedUser[]) => void;
   blockUser: (user: Omit<BlockedUser, "blockedAt">) => void;
   unblockUser: (userId: string) => void;
   isBlocked: (userId: string) => boolean;
+
+  // ── 알림 ──────────────────────────────────────────────
+  /** 서버에서 읽어온 알림 목록으로 갈아끼운다. 안 읽은 개수도 함께 맞춘다. */
+  setNotifications: (list: AppNotification[]) => void;
+  /** 뱃지 숫자만 갱신 (목록 없이 개수만 물어봤을 때) */
+  setUnreadCount: (count: number) => void;
+  /**
+   * Realtime 으로 방금 도착한 알림 한 줄.
+   * 같은 id 가 이미 있으면(목록을 다시 읽은 직후 등) 아무것도 하지 않는다.
+   */
+  addNotification: (item: AppNotification) => void;
+  /** 낙관적 읽음 처리. 서버 호출은 화면이 따로 한다. */
+  markNotificationRead: (id: string) => void;
+  markAllNotificationsRead: () => void;
 }
 
 const formatDate = (d = new Date()) =>
@@ -239,6 +311,11 @@ export const useStore = create<AppState>((set, get) => ({
   reports: [],
   blockedUsers: [],
 
+  // 알림도 서버가 갖고 있다. 목록은 알림 화면이, 개수는 앱 시작 시
+  // _layout.tsx 가 채운다.
+  notifications: [],
+  unreadCount: 0,
+
   setCurrentUser: (user) => set({ currentUser: user }),
 
   // 로그아웃하면 내 것이던 목록도 함께 비운다. 다음 계정이 들어와
@@ -255,6 +332,8 @@ export const useStore = create<AppState>((set, get) => ({
       matches: [],
       reports: [],
       blockedUsers: [],
+      notifications: [],
+      unreadCount: 0,
     }),
 
   // ... (기존 액션들 동일) ...
@@ -324,6 +403,8 @@ export const useStore = create<AppState>((set, get) => ({
     return true;
   },
 
+  setBlockedUsers: (users) => set({ blockedUsers: users }),
+
   blockUser: (user) =>
     set((state) => {
       if (state.blockedUsers.some((b) => b.id === user.id)) return state;
@@ -341,6 +422,52 @@ export const useStore = create<AppState>((set, get) => ({
     })),
 
   isBlocked: (userId) => get().blockedUsers.some((b) => b.id === userId),
+
+  // ── 알림 ────────────────────────────────────────────────
+  setNotifications: (list) =>
+    set({
+      notifications: list,
+      // 방금 받은 목록에서 다시 센다. 목록은 최근 50줄만 오므로 그보다 많이
+      // 밀려 있으면 실제보다 적게 세지만, 홈 탭이 화면에 들어올 때마다 개수를
+      // 정확히 다시 물어보므로((tabs)/index.tsx) 곧 제 값으로 돌아온다.
+      unreadCount: list.filter((n) => !n.isRead).length,
+    }),
+
+  setUnreadCount: (count) => set({ unreadCount: Math.max(0, count) }),
+
+  addNotification: (item) =>
+    set((state) => {
+      if (state.notifications.some((n) => n.id === item.id)) return state;
+      return {
+        notifications: [item, ...state.notifications],
+        unreadCount: state.unreadCount + (item.isRead ? 0 : 1),
+      };
+    }),
+
+  markNotificationRead: (id) =>
+    set((state) => {
+      const target = state.notifications.find((n) => n.id === id);
+      // 목록에 없어도(개수만 알고 있는 상태) 뱃지는 줄여야 한다.
+      const wasUnread = target ? !target.isRead : true;
+      if (target && target.isRead) return state;
+
+      return {
+        notifications: state.notifications.map((n) =>
+          n.id === id ? { ...n, isRead: true } : n,
+        ),
+        unreadCount: wasUnread
+          ? Math.max(0, state.unreadCount - 1)
+          : state.unreadCount,
+      };
+    }),
+
+  markAllNotificationsRead: () =>
+    set((state) => ({
+      notifications: state.notifications.map((n) =>
+        n.isRead ? n : { ...n, isRead: true },
+      ),
+      unreadCount: 0,
+    })),
 }));
 
 /** 신고 사유 라벨. 시트와 차단 목록이 같은 문구를 쓰도록 한곳에 둔다. */
