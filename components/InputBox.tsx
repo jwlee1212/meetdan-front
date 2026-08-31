@@ -6,7 +6,7 @@ import {
   View,
   TextInputProps,
 } from "react-native";
-import { Colors } from "@/constants/theme";
+import { Colors, Palette } from "@/constants/theme";
 
 interface InputBoxProps extends TextInputProps {
   label: string;
@@ -34,7 +34,7 @@ export const InputBox = ({
           style,
         ]}
         autoCapitalize="none"
-        placeholderTextColor={Colors.light.disabled}
+        placeholderTextColor={Palette.gray400}
         onFocus={(e) => {
           setIsFocused(true);
           onFocus?.(e);
@@ -57,12 +57,13 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 13,
     fontWeight: "600",
+    letterSpacing: -0.2,
     color: Colors.light.textSecondary,
     marginBottom: 8,
   },
   input: {
     borderWidth: 1.5,
-    borderColor: "transparent",
+    borderColor: Palette.gray200,
     paddingVertical: 15,
     paddingHorizontal: 16,
     borderRadius: 14,
@@ -72,15 +73,15 @@ const styles = StyleSheet.create({
   },
   inputFocused: {
     borderColor: Colors.light.primary,
-    backgroundColor: "#fff",
+    backgroundColor: Palette.white,
   },
   inputError: {
-    borderColor: "#FF4D4F",
+    borderColor: Palette.red,
   },
   errorText: {
     marginTop: 6,
     fontSize: 13,
-    color: "#FF4D4F",
+    color: Palette.red,
     fontWeight: "500",
   },
 });

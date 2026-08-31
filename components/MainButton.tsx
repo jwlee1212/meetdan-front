@@ -6,7 +6,7 @@ import {
   TouchableOpacity,
   TouchableOpacityProps,
 } from "react-native";
-import { Colors } from "@/constants/theme"; // 테마 컬러 가져오기
+import { Colors, Palette } from "@/constants/theme";
 
 interface MainButtonProps extends TouchableOpacityProps {
   title: string;
@@ -30,7 +30,7 @@ export const MainButton = ({
       {...props}
     >
       {isLoading ? (
-        <ActivityIndicator color="#fff" />
+        <ActivityIndicator color={Palette.white} />
       ) : (
         <Text
           style={[styles.buttonText, disabled && styles.buttonTextDisabled]}
@@ -54,7 +54,7 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.light.backgroundMuted,
   },
   buttonText: {
-    color: "#fff",
+    color: Palette.white,
     fontSize: 17,
     fontWeight: "700",
   },

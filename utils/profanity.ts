@@ -1,7 +1,7 @@
 // 파일: utils/profanity.ts
 //
-// 채팅 전송 전에 돌리는 비속어 필터.
-// 목록은 여기 하드코딩하고, 화면에서는 hasProfanity() 하나만 쓰면 된다.
+// 사람이 글을 적어 넣는 모든 자리에서 돌리는 비속어 필터.
+// 목록은 여기 하드코딩하고, 화면에서는 hasProfanity() / assertClean() 만 쓰면 된다.
 //
 // 단어가 100개쯤 되면 매 전송마다 배열을 순회하는 대신 정규식 하나로 합쳐두는 게
 // 훨씬 빠르다. 아래 정규식은 모듈이 처음 로드될 때 딱 한 번만 만들어진다.
@@ -14,6 +14,8 @@
 // CC BY 4.0은 출처 표기 의무가 있으므로 앱의 오픈소스 고지 화면에도 넣어야 한다.
 // 원본에서 오탐이 잦은 항목을 빼고(EXCLUDED 주석 참고) 일부 표현을 추가했다.
 // ────────────────────────────────────────────────────────────────────
+
+import { Alert } from "react-native";
 
 /* ------------------------------------------------------------------ */
 /* 1. 목록 (여기만 채우면 된다)                                          */
@@ -146,6 +148,18 @@ export const PROFANITY_ALERT_TITLE = "부적절한 표현이 포함되어 있어
 export const PROFANITY_ALERT_MESSAGE =
   "메시지를 다시 확인해주세요. 서로 기분 좋게 대화해요.";
 
+/**
+ * 채팅이 아닌 입력칸(제목·소개·닉네임 등)에서 쓰는 문구.
+ *
+ * 한 화면에 칸이 여럿이라 어느 칸이 걸렸는지는 알려줘야 고칠 수 있다.
+ * 다만 '어떤 단어'인지는 여전히 감춘다 — 알려주면 우회를 학습시키는 셈이다.
+ *
+ * 라벨 뒤에 조사를 붙이지 않고 따옴표로 감싼 이유: 받침에 따라 을/를·이/가가
+ * 갈리는데 라벨은 화면마다 다르다. 따옴표면 어떤 말이 와도 문장이 성립한다.
+ */
+export const profanityFieldMessage = (label: string) =>
+  `'${label}'에 쓸 수 없는 표현이 있어요. 다시 확인해주세요.`;
+
 /* ------------------------------------------------------------------ */
 /* 2. 내부 구현 (건드릴 일 없음)                                         */
 /* ------------------------------------------------------------------ */
@@ -240,4 +254,31 @@ export function findProfanity(text: string): string[] {
 /** 전송을 막아야 하는 메시지인지 */
 export function hasProfanity(text: string): boolean {
   return findProfanity(text).length > 0;
+}
+
+/**
+ * 여러 입력칸을 한 번에 검사하고, 걸리면 Alert 까지 띄운다.
+ *
+ * 화면마다 검사 코드를 다시 적지 않도록 저장/전송 직전에 한 줄로 부른다.
+ *
+ *   if (!assertClean({ 제목: title, "우리 팀 어필": content })) return;
+ *
+ * 키는 화면에 실제로 보이는 라벨을 그대로 쓴다. 사용자가 어느 칸을 고쳐야
+ * 하는지 바로 알 수 있어야 해서다. 여러 칸이 걸려도 첫 칸만 알린다 —
+ * 어차피 고치고 다시 누르면 다음 칸이 잡힌다.
+ *
+ * 검사는 '저장 직전'이지 '타이핑 중'이 아니다. 한글은 조합 중인 글자가
+ * 잠깐 다른 글자로 보이기 때문에(ㅅ→시→십) 입력 중에 막으면 멀쩡한 말도
+ * 걸리고, 무엇보다 글자가 지워지는 것처럼 보인다.
+ */
+export function assertClean(
+  fields: Record<string, string | null | undefined>,
+): boolean {
+  for (const [label, value] of Object.entries(fields)) {
+    if (value && hasProfanity(value)) {
+      Alert.alert(PROFANITY_ALERT_TITLE, profanityFieldMessage(label));
+      return false;
+    }
+  }
+  return true;
 }

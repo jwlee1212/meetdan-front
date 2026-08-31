@@ -22,8 +22,8 @@ import {
 import { API, toRelativeTime } from "@/api/client";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PressScale } from "@/components/ui/press-scale";
-import { NavHeader, Screen } from "@/components/ui/screen";
-import { Palette, Radius, Spacing, Typo } from "@/constants/theme";
+import { Divider, NavHeader, Screen } from "@/components/ui/screen";
+import { Hairline, Palette, Radius, Spacing, Typo } from "@/constants/theme";
 import {
   groupNotifications,
   notificationTarget,
@@ -206,6 +206,7 @@ export default function NotificationsScreen() {
           renderSectionHeader={({ section }) => (
             <Text style={styles.sectionTitle}>{section.title}</Text>
           )}
+          ItemSeparatorComponent={() => <Divider inset={72} />}
           stickySectionHeadersEnabled={false}
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.listContent}
@@ -241,14 +242,18 @@ const styles = StyleSheet.create({
   },
   settingsButton: { paddingLeft: Spacing.sm, paddingVertical: 2 },
 
-  listContent: { paddingBottom: Spacing.xxxl },
+  listContent: { paddingTop: Spacing.xs, paddingBottom: Spacing.xxxl },
 
+  // 날짜 묶음 머리. 위쪽에 회색 띠를 깔아 앞 묶음과 끊는다.
   sectionTitle: {
-    ...Typo.label,
-    color: Palette.gray500,
+    ...Typo.section,
+    color: Palette.gray600,
     paddingHorizontal: Spacing.screen,
-    paddingTop: Spacing.xl,
+    paddingTop: Spacing.lg,
     paddingBottom: Spacing.sm,
+    backgroundColor: Palette.white,
+    borderTopWidth: Hairline.height,
+    borderTopColor: Hairline.color,
   },
 
   row: {
@@ -259,9 +264,9 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.lg,
     backgroundColor: Palette.white,
   },
-  // 안 읽은 줄은 아주 옅은 브랜드 배경으로 띄운다.
-  // (읽은 줄과 나란히 놓였을 때만 알아볼 정도면 충분하다)
-  rowUnread: { backgroundColor: Palette.brandWeak + "66" },
+  // 안 읽은 것만 옅은 브랜드 배경. 읽은 줄과 나란히 놓였을 때
+  // 알아볼 정도면 충분하고, 그 이상은 목록을 시끄럽게 만든다.
+  rowUnread: { backgroundColor: Palette.brandWeak },
 
   iconCircle: {
     width: 44,
@@ -290,7 +295,7 @@ const styles = StyleSheet.create({
     marginTop: 3,
     lineHeight: 20,
   },
-  time: { ...Typo.caption, fontSize: 12, color: Palette.gray400, marginTop: 4 },
+  time: { ...Typo.caption, fontSize: 12, color: Palette.gray500, marginTop: 4 },
 
   chevron: { marginLeft: -Spacing.xs },
 });

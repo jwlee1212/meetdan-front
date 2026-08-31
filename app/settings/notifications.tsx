@@ -122,7 +122,7 @@ export default function NotificationSettingsScreen() {
   };
 
   return (
-    <Screen>
+    <Screen tone="grouped">
       <NavHeader title="알림 설정" onBack={() => router.back()} />
 
       {isLoading ? (
@@ -209,12 +209,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     gap: 6,
-    marginHorizontal: Spacing.screen,
-    marginTop: Spacing.lg,
-    marginBottom: Spacing.lg,
-    padding: Spacing.md,
-    borderRadius: Radius.md,
-    backgroundColor: Palette.gray50,
+    paddingHorizontal: Spacing.screen,
+    paddingVertical: Spacing.lg,
+    backgroundColor: Palette.brandWeak,
   },
   noticeText: {
     ...Typo.caption,
@@ -223,20 +220,15 @@ const styles = StyleSheet.create({
   },
 
   card: {
-    marginHorizontal: Spacing.screen,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Palette.gray100,
     backgroundColor: Palette.white,
-    overflow: "hidden",
   },
-  cardGap: { marginTop: Spacing.lg },
+  cardGap: { marginTop: Spacing.gap },
 
   row: {
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.md,
-    paddingHorizontal: Spacing.lg,
+    paddingHorizontal: Spacing.screen,
     paddingVertical: Spacing.lg,
   },
   iconCircle: {
@@ -254,7 +246,7 @@ const styles = StyleSheet.create({
   footnote: {
     ...Typo.caption,
     fontSize: 12,
-    color: Palette.gray400,
+    color: Palette.gray500,
     textAlign: "center",
     marginTop: Spacing.xl,
     paddingHorizontal: Spacing.screen,

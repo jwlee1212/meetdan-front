@@ -18,7 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { BottomSheet, SheetCancel } from "@/components/ui/bottom-sheet";
 import { MemberProfileSheet } from "@/components/ui/member-profile-sheet";
 import { PressScale } from "@/components/ui/press-scale";
-import { Divider, NavHeader, Screen } from "@/components/ui/screen";
+import { NavHeader, Screen, SectionGap } from "@/components/ui/screen";
 import { getAvatarSource } from "@/constants/avatars";
 import {
   CampusColor,
@@ -79,7 +79,7 @@ export default function PostDetail() {
 
   if (!targetPost) {
     return (
-      <Screen>
+      <Screen tone="grouped">
         <NavHeader title="게시글" onBack={() => router.back()} bordered />
         <View style={styles.center}>
           <Text style={styles.emptyText}>삭제된 게시글이에요.</Text>
@@ -164,7 +164,7 @@ export default function PostDetail() {
   const campusColor = CampusColor[targetPost.campus];
 
   return (
-    <Screen>
+    <Screen tone="grouped">
       <NavHeader title="게시글" onBack={() => router.back()} bordered />
 
       <ScrollView
@@ -172,7 +172,7 @@ export default function PostDetail() {
         showsVerticalScrollIndicator={false}
       >
         {/* ── 헤더 ─────────────────────────────────────── */}
-        <View style={styles.header}>
+        <View style={styles.heroCard}>
           <View style={styles.badgeRow}>
             <Badge label={`${targetPost.campus} 캠퍼스`} colors={campusColor} />
             <Badge label={targetPost.dept} />
@@ -185,10 +185,9 @@ export default function PostDetail() {
               </Text>
             ))}
           </View>
-        </View>
 
-        {/* ── 요약 정보 ─────────────────────────────────── */}
-        <View style={styles.statRow}>
+          {/* ── 요약 정보 ───────────────────────────────── */}
+          <View style={styles.statRow}>
           <StatCard
             icon="people"
             label="인원"
@@ -205,9 +204,10 @@ export default function PostDetail() {
             value={targetPost.gender === "F" ? "여자" : "남자"}
             tint={genderColor}
           />
+          </View>
         </View>
 
-        <Divider />
+        <SectionGap />
 
         {/* ── 소개글 ───────────────────────────────────── */}
         <View style={styles.section}>
@@ -215,7 +215,7 @@ export default function PostDetail() {
           <Text style={styles.content}>{targetPost.content}</Text>
         </View>
 
-        <Divider />
+        <SectionGap />
 
         {/* ── 팀원 ─────────────────────────────────────── */}
         <View style={styles.section}>
@@ -354,15 +354,15 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   emptyText: { ...Typo.body, color: Palette.gray500 },
 
-  scrollContent: {
-    paddingHorizontal: Spacing.screen,
-    paddingTop: Spacing.md,
-    paddingBottom: 120,
-  },
+  scrollContent: { paddingBottom: 120 },
 
-  header: { marginBottom: Spacing.xl },
+  // 제목·태그·요약을 한 블록에 담는다. 좌우로 꽉 차고 모서리를 굴리지 않는다.
+  heroCard: {
+    backgroundColor: Palette.white,
+    padding: Spacing.screen,
+  },
   badgeRow: { flexDirection: "row", gap: Spacing.xs, marginBottom: Spacing.md },
-  title: { ...Typo.display, fontSize: 24, marginBottom: Spacing.md },
+  title: { ...Typo.display, fontSize: 22, marginBottom: Spacing.md },
   tags: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.xs },
   tagText: {
     backgroundColor: Palette.gray100,
@@ -377,15 +377,15 @@ const styles = StyleSheet.create({
   statRow: {
     flexDirection: "row",
     gap: Spacing.sm,
-    marginBottom: Spacing.xl,
+    marginTop: Spacing.lg,
   },
   statCard: {
     flex: 1,
     alignItems: "center",
     gap: 6,
-    paddingVertical: Spacing.lg,
-    borderRadius: Radius.lg,
-    backgroundColor: Palette.gray50,
+    paddingVertical: Spacing.md,
+    borderRadius: Radius.md,
+    backgroundColor: Palette.gray100,
   },
   statIconWrap: {
     width: 32,
@@ -402,19 +402,22 @@ const styles = StyleSheet.create({
   },
   statLabel: { ...Typo.caption, fontSize: 12 },
 
-  section: { paddingVertical: Spacing.xl },
+  section: {
+    backgroundColor: Palette.white,
+    padding: Spacing.screen,
+  },
   sectionTitle: Typo.section,
-  sectionDesc: { ...Typo.caption, marginTop: 4, marginBottom: Spacing.lg },
+  sectionDesc: { ...Typo.caption, marginTop: 4 },
   content: { ...Typo.body, lineHeight: 24 },
 
-  memberList: { gap: Spacing.sm },
+  memberList: { gap: Spacing.sm, marginTop: Spacing.md },
   memberRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.md,
     padding: Spacing.md,
-    borderRadius: Radius.lg,
-    backgroundColor: Palette.gray50,
+    borderRadius: Radius.md,
+    backgroundColor: Palette.gray100,
   },
   memberAvatar: {
     width: 44,
@@ -440,7 +443,7 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.md,
     backgroundColor: Palette.white,
     borderTopWidth: 1,
-    borderTopColor: Palette.gray100,
+    borderTopColor: Palette.gray200,
     ...Shadow.soft,
   },
   requestButton: {
@@ -463,7 +466,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     padding: Spacing.lg,
     borderWidth: 1,
-    borderColor: Palette.gray100,
+    borderColor: Palette.gray200,
     borderRadius: Radius.lg,
     marginBottom: Spacing.sm,
   },

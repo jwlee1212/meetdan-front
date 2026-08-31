@@ -35,6 +35,7 @@ import {
   Typo,
 } from "@/constants/theme";
 import { useStore } from "@/store/useStore";
+import { assertClean } from "@/utils/profanity";
 import { API } from "@/api/client";
 import type { ProfilePatch } from "@/api/client";
 import { profileImages } from "@/constants/avatars";
@@ -121,6 +122,9 @@ export default function ProfileTab() {
       return;
     }
 
+    // 닉네임과 소개는 상대 팀에게 그대로 보이는 값이다
+    if (!assertClean({ 닉네임: nickname, "한 줄 소개": bio })) return;
+
     try {
       setIsSaving(true);
       const result = await API.updateMyProfile({ ...draft, nickname, bio });
@@ -188,7 +192,7 @@ export default function ProfileTab() {
 
   if (isLoading) {
     return (
-      <Screen>
+      <Screen tone="grouped">
         <ScreenHeader title="마이" />
         <View style={styles.loading}>
           <ActivityIndicator color={Palette.brand} />
@@ -198,7 +202,7 @@ export default function ProfileTab() {
   }
 
   return (
-    <Screen>
+    <Screen tone="grouped">
       <ScreenHeader title="마이" />
 
       <KeyboardAwareScrollView
@@ -389,7 +393,7 @@ export default function ProfileTab() {
                 }
                 style={({ pressed }) => [
                   styles.menuRow,
-                  pressed && { backgroundColor: Palette.gray50 },
+                  pressed && { backgroundColor: Palette.gray100 },
                 ]}
               >
                 <Ionicons name={item.icon} size={22} color={Palette.gray600} />
@@ -410,7 +414,7 @@ export default function ProfileTab() {
           onPress={handleLogout}
           style={({ pressed }) => [
             styles.logoutRow,
-            pressed && { backgroundColor: Palette.gray50 },
+            pressed && { backgroundColor: Palette.red },
           ]}
         >
           <Text style={styles.logoutText}>로그아웃</Text>
@@ -481,11 +485,13 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 const styles = StyleSheet.create({
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
 
+  // 좌우로 꽉 찬 흰 블록. 블록끼리는 SectionGap 회색 띠로 끊는다.
   profileSection: {
     alignItems: "center",
     paddingHorizontal: Spacing.screen,
-    paddingTop: Spacing.sm,
-    paddingBottom: Spacing.xxl,
+    paddingTop: Spacing.xl,
+    paddingBottom: Spacing.xl,
+    backgroundColor: Palette.white,
   },
   avatarWrap: { position: "relative", marginBottom: Spacing.lg },
   avatar: {
@@ -515,7 +521,7 @@ const styles = StyleSheet.create({
     marginTop: 6,
     textAlign: "center",
   },
-  bioEmpty: { color: Palette.gray400 },
+  bioEmpty: { color: Palette.gray500 },
   summaryMetaRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -545,7 +551,7 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
     letterSpacing: -0.2,
-    color: Palette.gray500,
+    color: Palette.gray600,
     marginBottom: Spacing.sm,
   },
   bioInput: {
@@ -555,14 +561,14 @@ const styles = StyleSheet.create({
   },
   counter: {
     ...Typo.caption,
-    color: Palette.gray400,
+    color: Palette.gray500,
     alignSelf: "flex-end",
     marginTop: -12,
     marginBottom: Spacing.lg,
   },
   helperText: {
     ...Typo.caption,
-    color: Palette.gray400,
+    color: Palette.gray600,
     marginBottom: Spacing.xl,
   },
 
@@ -604,13 +610,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "600",
     letterSpacing: -0.3,
-    color: Palette.gray500,
+    color: Palette.gray600,
   },
 
   infoSection: {
-    paddingHorizontal: Spacing.screen,
-    paddingTop: Spacing.xl,
-    paddingBottom: Spacing.lg,
+    padding: Spacing.screen,
+    backgroundColor: Palette.white,
   },
   infoHeader: {
     flexDirection: "row",
@@ -626,7 +631,7 @@ const styles = StyleSheet.create({
   infoList: {
     marginTop: Spacing.lg,
     borderRadius: Radius.md,
-    backgroundColor: Palette.gray50,
+    backgroundColor: Palette.gray100,
     paddingHorizontal: Spacing.lg,
   },
   infoRow: {
@@ -640,7 +645,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     letterSpacing: -0.3,
-    color: Palette.gray500,
+    color: Palette.gray600,
   },
   infoValue: {
     flex: 1,
@@ -654,7 +659,10 @@ const styles = StyleSheet.create({
     marginTop: Spacing.lg,
   },
 
-  menuSection: { paddingVertical: Spacing.xs },
+  menuSection: {
+    paddingVertical: Spacing.xs,
+    backgroundColor: Palette.white,
+  },
   menuRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -671,17 +679,18 @@ const styles = StyleSheet.create({
   },
 
   logoutRow: {
-    paddingHorizontal: Spacing.screen,
     paddingVertical: Spacing.lg,
+    alignItems: "center",
+    backgroundColor: Palette.white,
   },
   logoutText: {
     fontSize: 15,
-    fontWeight: "600",
+    fontWeight: "700",
     letterSpacing: -0.3,
-    color: Palette.gray500,
+    color: Palette.gray600,
   },
 
-  sheetBackdrop: { flex: 1, backgroundColor: "rgba(25,31,40,0.45)" },
+  sheetBackdrop: { flex: 1, backgroundColor: "rgba(11,18,32,0.5)" },
   sheet: {
     backgroundColor: Palette.white,
     borderTopLeftRadius: Radius.xxl,
@@ -695,7 +704,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 4,
     borderRadius: Radius.full,
-    backgroundColor: Palette.gray200,
+    backgroundColor: Palette.gray300,
     marginBottom: Spacing.xl,
   },
   sheetTitle: Typo.title,

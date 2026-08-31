@@ -842,6 +842,50 @@ const toNotification = (row: NotificationRow): AppNotification => ({
   createdAt: row.created_at,
 });
 
+// ============================================================
+// 밸런스 게임 (홈 피드)
+// ============================================================
+
+export type BalanceChoice = "A" | "B";
+
+/**
+ * 오늘의 밸런스 게임 한 판. 질문·집계·내 선택이 한 번에 온다.
+ *
+ * 표 자체(누가 무엇을 골랐는지)는 서버 밖으로 안 나온다. 여기 오는 건
+ * 개수 두 개와 "내가 고른 것" 뿐이다 (마이그레이션 016).
+ */
+export type BalanceGame = {
+  /** balance_questions.id. 투표할 때 그대로 돌려보낸다 */
+  questionId: number;
+  question: string;
+  optionA: string;
+  optionB: string;
+  votesA: number;
+  votesB: number;
+  /** 아직 안 골랐으면 null */
+  myChoice: BalanceChoice | null;
+};
+
+type BalanceRow = {
+  question_id: number;
+  question: string;
+  option_a: string;
+  option_b: string;
+  votes_a: number;
+  votes_b: number;
+  my_choice: BalanceChoice | null;
+};
+
+const toBalanceGame = (row: BalanceRow): BalanceGame => ({
+  questionId: row.question_id,
+  question: row.question,
+  optionA: row.option_a,
+  optionB: row.option_b,
+  votesA: row.votes_a ?? 0,
+  votesB: row.votes_b ?? 0,
+  myChoice: row.my_choice ?? null,
+});
+
 export const API = {
   /** 인증번호 발송 */
   requestEmailAuth: async (email: string): Promise<ApiResponse> => {
@@ -2031,6 +2075,53 @@ export const API = {
       return fail(400, describeDbError(error));
     }
     return ok();
+  },
+
+  // ============================================================
+  // 밸런스 게임
+  // ============================================================
+
+  /**
+   * 오늘의 질문. 서울 시각 자정에 바뀐다(서버가 고른다).
+   *
+   * 마이그레이션 016 을 아직 안 돌린 프로젝트에서는 함수가 없어 실패한다.
+   * 홈이 그걸로 막히면 안 되므로, 부르는 쪽은 실패를 "이 줄은 안 보여준다"
+   * 정도로만 다룬다.
+   */
+  getBalanceGame: async (): Promise<ApiResponse<BalanceGame>> => {
+    const { data, error } = await supabase.rpc("balance_game_today");
+
+    if (error) return fail(500, describeDbError(error));
+
+    // 질문 풀이 비었으면 빈 배열이 온다
+    const row = (data as BalanceRow[] | null)?.[0];
+    if (!row) return fail(404, "오늘의 질문이 없어요.");
+
+    return ok(toBalanceGame(row));
+  },
+
+  /**
+   * 한 표. 갱신된 집계까지 함께 돌려받는다.
+   *
+   * 이미 고른 사람이 다시 부르면 서버가 표를 바꾸지 않고 현재 집계만
+   * 돌려준다 — 결과를 보고 이긴 쪽으로 갈아타지 못하게 한 것이라
+   * 오류가 아니다.
+   */
+  voteBalanceGame: async (
+    questionId: number,
+    choice: BalanceChoice,
+  ): Promise<ApiResponse<BalanceGame>> => {
+    const { data, error } = await supabase.rpc("vote_balance_game", {
+      p_question_id: questionId,
+      p_choice: choice,
+    });
+
+    if (error) return fail(400, describeDbError(error));
+
+    const row = (data as BalanceRow[] | null)?.[0];
+    if (!row) return fail(404, "오늘의 질문이 없어요.");
+
+    return ok(toBalanceGame(row));
   },
 
   /** 로그아웃. 세션이 사라지면 _layout.tsx 가 알아서 로그인 화면으로 보낸다. */

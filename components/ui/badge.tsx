@@ -1,7 +1,7 @@
 import React from "react";
 import { StyleSheet, Text, View, ViewStyle } from "react-native";
 
-import { Palette, Radius, Spacing } from "@/constants/theme";
+import { Palette } from "@/constants/theme";
 
 export type BadgeTone =
   | "neutral"
@@ -11,12 +11,19 @@ export type BadgeTone =
   | "warn"
   | "solid";
 
+/**
+ * 옅은 배경 + 진한 글씨 조합. 전부 배경 위에서 4.5:1 이상으로 맞춰둔 짝이라
+ * 한쪽만 바꾸면 대비가 깨진다. 바꿀 땐 두 값을 같이 본다.
+ *
+ * solid 만 예외로 채운 브랜드색이다. "정보"가 아니라 "지금 이 팀이 공개중"처럼
+ * 강하게 튀어야 하는 한 가지에만 쓴다.
+ */
 const TONES: Record<BadgeTone, { bg: string; fg: string }> = {
-  neutral: { bg: Palette.gray100, fg: Palette.gray600 },
+  neutral: { bg: Palette.gray100, fg: Palette.gray700 },
   brand: { bg: Palette.brandWeak, fg: Palette.brandText },
-  success: { bg: Palette.greenWeak, fg: "#0E9F5B" },
-  danger: { bg: Palette.redWeak, fg: Palette.red },
-  warn: { bg: Palette.orangeWeak, fg: "#D97400" },
+  success: { bg: Palette.greenWeak, fg: Palette.greenText },
+  danger: { bg: Palette.redWeak, fg: Palette.redText },
+  warn: { bg: Palette.orangeWeak, fg: Palette.orangeText },
   solid: { bg: Palette.brand, fg: Palette.white },
 };
 
@@ -42,9 +49,9 @@ export function Badge({ label, tone = "neutral", colors, style }: BadgeProps) {
 
 const styles = StyleSheet.create({
   badge: {
-    paddingHorizontal: Spacing.sm,
-    paddingVertical: 5,
-    borderRadius: Radius.sm,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    borderRadius: 6,
     alignSelf: "flex-start",
   },
   text: {

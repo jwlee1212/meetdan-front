@@ -17,6 +17,8 @@ import { MainButton } from "@/components/MainButton";
 import { API } from "@/api/client";
 import { useStore } from "@/store/useStore";
 
+import { Palette, Spacing } from "@/constants/theme";
+
 export default function Login() {
   const router = useRouter();
   const setCurrentUser = useStore((state) => state.setCurrentUser);
@@ -102,7 +104,7 @@ export default function Login() {
           onPress={() => router.push("/signupScreen")}
           style={{ marginTop: 20, alignSelf: "center" }}
         >
-          <Text style={{ color: "#999" }}>회원가입</Text>
+          <Text style={styles.signupLink}>회원가입</Text>
         </TouchableOpacity>
       </View>
     </KeyboardAwareScrollView>
@@ -112,25 +114,34 @@ export default function Login() {
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
-    backgroundColor: "#fff",
+    backgroundColor: Palette.white,
   },
   container: {
     flexGrow: 1,
     justifyContent: "center",
-    paddingHorizontal: 30,
+    paddingHorizontal: Spacing.xxxl,
   },
   formArea: {
     width: "100%",
   },
   title: {
-    fontSize: 30,
-    fontWeight: "bold",
-    color: "#333",
+    fontSize: 28,
+    fontWeight: "800",
+    letterSpacing: -0.8,
+    color: Palette.gray900,
     marginBottom: 5,
   },
+  signupLink: {
+    fontSize: 15,
+    fontWeight: "700",
+    letterSpacing: -0.3,
+    color: Palette.brand,
+  },
   subtitle: {
-    fontSize: 16,
-    color: "#888",
+    fontSize: 15,
+    fontWeight: "500",
+    letterSpacing: -0.3,
+    color: Palette.gray600,
     marginBottom: 40,
   },
 });

@@ -24,9 +24,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { API } from "@/api/client";
 
 import { Badge, BadgeTone } from "@/components/ui/badge";
-import { EmptyState } from "@/components/ui/empty-state";
+import { EmptyHint, EmptyState } from "@/components/ui/empty-state";
 import { PressScale } from "@/components/ui/press-scale";
-import { Screen, ScreenHeader } from "@/components/ui/screen";
+import { Screen, ScreenHeader, SectionHeader } from "@/components/ui/screen";
 import {
   Colors,
   Hairline,
@@ -399,7 +399,7 @@ export default function MyTeamTab() {
   };
 
   return (
-    <Screen>
+    <Screen tone="grouped">
       <ScreenHeader title="내 팀" subtitle="만든 팀과 참여한 팀을 관리해요" />
 
       <View style={styles.actionRow}>
@@ -408,8 +408,8 @@ export default function MyTeamTab() {
           style={[styles.actionCard, styles.actionCardBrand]}
           onPress={() => router.push("/write")}
         >
-          <Ionicons name="add-circle" size={22} color={Palette.brand} />
-          <Text style={[styles.actionText, { color: Palette.brandText }]}>
+          <Ionicons name="add-circle" size={22} color={Palette.white} />
+          <Text style={[styles.actionText, { color: Palette.white }]}>
             팀 만들기
           </Text>
         </PressScale>
@@ -442,6 +442,15 @@ export default function MyTeamTab() {
               tintColor={Palette.brand}
             />
           }
+          ListHeaderComponent={
+            myTeams.length > 0 ? (
+              <SectionHeader
+                title="참여 중인 팀"
+                count={myTeams.length}
+                style={styles.sectionHeader}
+              />
+            ) : null
+          }
           ListEmptyComponent={
             <EmptyState
               icon="people-outline"
@@ -449,7 +458,10 @@ export default function MyTeamTab() {
               description="팀을 만들고 초대 코드로 친구를 부르면 과팅을 시작할 수 있어요."
               actionLabel="첫 팀 만들기"
               onAction={() => router.push("/write")}
-            />
+            >
+              <EmptyHint icon="people-outline" text="같은 성별끼리 2~4명이 한 팀이에요" />
+              <EmptyHint icon="ticket-outline" text="초대 코드를 받았다면 '코드로 참여'를 누르세요" />
+            </EmptyState>
           }
         />
       )}
@@ -516,7 +528,7 @@ export default function MyTeamTab() {
                 <Text
                   style={[
                     styles.sheetSubmitText,
-                    !inputCode.trim() && { color: Palette.gray400 },
+                    !inputCode.trim() && { color: Palette.gray500 },
                   ]}
                 >
                   입장하기
@@ -534,12 +546,17 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
 
+  // 헤더 아래 첫 흰 블록. 아래 여백으로 회색 바탕이 비쳐 목록과 끊긴다.
   actionRow: {
     flexDirection: "row",
     gap: Spacing.md,
     paddingHorizontal: Spacing.screen,
-    paddingBottom: Spacing.xl,
+    paddingTop: Spacing.xs,
+    paddingBottom: Spacing.lg,
+    marginBottom: Spacing.gap,
+    backgroundColor: Colors.light.surface,
   },
+  // 버튼은 블록이 아니므로 모서리를 굴려도 된다. 그림자만 뺀다.
   actionCard: {
     flex: 1,
     flexDirection: "row",
@@ -550,7 +567,8 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     backgroundColor: Palette.gray100,
   },
-  actionCardBrand: { backgroundColor: Palette.brandWeak },
+  // 주 동작 하나만 채운 파랑. 나머지는 회색으로 둔다.
+  actionCardBrand: { backgroundColor: Palette.brand },
   actionText: {
     fontSize: 15,
     fontWeight: "700",
@@ -558,15 +576,15 @@ const styles = StyleSheet.create({
     color: Palette.gray700,
   },
 
-  listContent: { paddingHorizontal: Spacing.screen, paddingBottom: Spacing.xxxl },
+  listContent: { paddingBottom: Spacing.xxxl },
+  sectionHeader: { backgroundColor: Colors.light.surface },
 
+  // 팀 하나가 블록 하나. 좌우로 꽉 차고, 아래 여백으로 회색 바탕이 비쳐
+  // 블록 사이가 회색 띠로 끊긴다 (토스 설정 화면과 같은 방식).
   card: {
-    backgroundColor: Palette.white,
-    borderRadius: Radius.lg,
-    borderWidth: 1,
-    borderColor: Colors.light.border,
-    padding: Spacing.xl,
-    marginBottom: Spacing.md,
+    backgroundColor: Colors.light.surface,
+    padding: Spacing.screen,
+    marginBottom: Spacing.gap,
   },
   cardTop: {
     flexDirection: "row",
@@ -596,7 +614,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.3,
     color: Palette.gray900,
   },
-  progressTotal: { color: Palette.gray400, fontSize: 13 },
+  progressTotal: { color: Palette.gray500, fontSize: 13 },
   progressTrack: {
     height: 6,
     borderRadius: Radius.full,
@@ -616,7 +634,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    backgroundColor: Palette.gray50,
+    backgroundColor: Palette.gray100,
     borderRadius: Radius.md,
     paddingHorizontal: Spacing.lg,
     paddingVertical: Spacing.md,
@@ -638,7 +656,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.sm,
     backgroundColor: Palette.white,
     borderWidth: 1,
-    borderColor: Colors.light.border,
+    borderColor: Palette.gray300,
   },
   copyText: {
     fontSize: 13,
@@ -669,13 +687,13 @@ const styles = StyleSheet.create({
     gap: 6,
     paddingVertical: Spacing.lg,
     borderRadius: Radius.md,
-    backgroundColor: Palette.gray50,
+    backgroundColor: Palette.gray100,
   },
   lockedText: {
     fontSize: 13,
     fontWeight: "600",
     letterSpacing: -0.2,
-    color: Palette.gray500,
+    color: Palette.gray600,
   },
 
   manageRow: { flexDirection: "row", alignItems: "center" },
@@ -693,9 +711,9 @@ const styles = StyleSheet.create({
     letterSpacing: -0.2,
     color: Palette.gray600,
   },
-  manageDivider: { width: 1, height: 14, backgroundColor: Palette.gray200 },
+  manageDivider: { width: 1, height: 14, backgroundColor: Palette.gray300 },
 
-  sheetBackdrop: { flex: 1, backgroundColor: "rgba(25,31,40,0.45)" },
+  sheetBackdrop: { flex: 1, backgroundColor: "rgba(11,18,32,0.5)" },
   sheet: {
     backgroundColor: Palette.white,
     borderTopLeftRadius: Radius.xxl,
@@ -709,7 +727,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 4,
     borderRadius: Radius.full,
-    backgroundColor: Palette.gray200,
+    backgroundColor: Palette.gray300,
     marginBottom: Spacing.xl,
   },
   sheetTitle: Typo.title,
@@ -731,7 +749,7 @@ const styles = StyleSheet.create({
     backgroundColor: Palette.brand,
     alignItems: "center",
   },
-  sheetSubmitDisabled: { backgroundColor: Palette.gray100 },
+  sheetSubmitDisabled: { backgroundColor: Palette.gray200 },
   sheetSubmitText: {
     color: Palette.white,
     fontSize: 16,

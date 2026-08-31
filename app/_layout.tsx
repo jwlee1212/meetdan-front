@@ -5,11 +5,10 @@ import * as SplashScreen from "expo-splash-screen";
 import { useEffect, useRef, useState } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { View, StyleSheet } from "react-native";
 import type { Session } from "@supabase/supabase-js";
 
 import { API } from "@/api/client";
-import MeetDanLogo from "@/components/Logo";
+import { SplashOverlay } from "@/components/SplashOverlay";
 import { registerForPushNotifications, setBadgeCount } from "@/lib/push";
 import { supabase } from "@/lib/supabase";
 import { useStore } from "@/store/useStore";
@@ -26,9 +25,17 @@ export default function RootLayout() {
   const segments = useSegments();
   const navigationState = useRootNavigationState();
 
-  // 저장된 세션을 다 읽기 전까지는 로고 화면으로 덮는다.
+  // 저장된 세션을 다 읽기 전까지는 브랜드 화면으로 덮는다.
   const [isReady, setIsReady] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
+
+  /**
+   * 덮개를 언제 내릴지는 isReady 가 아니라 이 값이 정한다.
+   *
+   * 세션은 대개 0.2초면 복원된다. isReady 하나로 판단하면 문구가 뜨다 마는
+   * 깜빡임이 되므로, 연출이 끝났다고 SplashOverlay 가 알려줄 때까지 기다린다.
+   */
+  const [showSplash, setShowSplash] = useState(true);
 
   // 앱 아이콘 뱃지가 따라가는 값. 알림 도착·읽음이 여기 모인다.
   const unreadCount = useStore((state) => state.unreadCount);
@@ -37,10 +44,11 @@ export default function RootLayout() {
   // getLastNotificationResponseAsync 양쪽으로 들어올 수 있다.
   const handledPushes = useRef<Set<string>>(new Set());
 
-  // 1️⃣ 앱이 켜지자마자 흰 네이티브 화면을 치워 우리 로고가 바로 보이게 한다
-  useEffect(() => {
-    SplashScreen.hideAsync();
-  }, []);
+  // 1️⃣ 네이티브 스플래시는 여기서 내리지 않는다.
+  //
+  //    iOS 네이티브 스플래시와 SplashOverlay 는 같은 문구 이미지를 띄운다.
+  //    그림이 화면에 올라오기 전에 네이티브를 내리면 문구가 한 번 끊겼다
+  //    다시 나타나므로, 내리는 시점은 그림을 그리는 SplashOverlay 가 정한다.
 
   // 2️⃣ 저장된 세션 복원 + 이후의 로그인/로그아웃 구독
   //    supabase-js 가 AsyncStorage 에서 토큰을 읽고 만료됐으면 알아서 갱신한다.
@@ -235,23 +243,16 @@ export default function RootLayout() {
           <Stack.Screen name="+not-found" />
         </Stack>
 
-        {/* 2. 커스텀 스플래쉬 화면 (isReady가 false일 때만 덮어씌움) */}
-        {!isReady && (
-          <View style={styles.splashContainer}>
-            <MeetDanLogo size={150} showText={true} />
-          </View>
+        {/* 2. 커스텀 스플래쉬 화면
+              "학교에서 사랑을 찾다" → 로고 순으로 보여준 뒤, 앱 준비까지
+              끝났으면 스스로 페이드아웃하고 onFinish 로 알려준다. */}
+        {showSplash && (
+          <SplashOverlay
+            isAppReady={isReady}
+            onFinish={() => setShowSplash(false)}
+          />
         )}
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );
 }
-
-const styles = StyleSheet.create({
-  splashContainer: {
-    ...StyleSheet.absoluteFillObject, // 화면 전체 꽉 채우기
-    backgroundColor: "#ffffff", // 배경색
-    justifyContent: "center",
-    alignItems: "center",
-    zIndex: 9999, // 다른 화면보다 무조건 위에 뜨게
-  },
-});

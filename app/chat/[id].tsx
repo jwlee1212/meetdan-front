@@ -1398,7 +1398,7 @@ function ChatDrawer({
         onPress={() => onPressMember(p)}
         style={({ pressed }) => [
           styles.memberRow,
-          pressed && actionable && { backgroundColor: Palette.gray50 },
+          pressed && actionable && { backgroundColor: Palette.gray100 },
         ]}
       >
         <View style={[styles.memberAvatar, blocked && styles.avatarMuted]}>
@@ -1521,7 +1521,7 @@ function DrawerLink({
       onPress={onPress}
       style={({ pressed }) => [
         styles.drawerLink,
-        pressed && { backgroundColor: Palette.gray50 },
+        pressed && { backgroundColor: Palette.gray100 },
       ]}
     >
       <Ionicons name={icon} size={20} color={Palette.gray600} />
@@ -1616,7 +1616,7 @@ const styles = StyleSheet.create({
     color: Palette.white,
   },
 
-  list: { flex: 1, backgroundColor: Palette.gray50 },
+  list: { flex: 1, backgroundColor: Palette.canvas },
   // inverted 리스트라 위아래가 뒤집힌다. paddingTop 이 화면 아래에 붙으므로
   // 예전과 같은 여백을 얻으려면 두 값을 서로 바꿔 둬야 한다.
   listContent: {
@@ -1758,7 +1758,7 @@ const styles = StyleSheet.create({
   myBubbleText: { color: Palette.white },
   /** 보내는 중 — 서버가 받았다는 답이 오면 원래 색으로 돌아온다 */
   bubblePending: { opacity: 0.6 },
-  bubbleFailed: { backgroundColor: Palette.gray400 },
+  bubbleFailed: { backgroundColor: Palette.gray600 },
 
   blockedBubble: {
     flexDirection: "row",
@@ -1778,7 +1778,7 @@ const styles = StyleSheet.create({
   // 말풍선 아래에 붙는다. marginHorizontal 은 말풍선 모서리와 붙지 않게.
   timeText: {
     fontSize: 11,
-    color: Palette.gray400,
+    color: Palette.gray500,
     marginTop: 3,
     marginHorizontal: 4,
   },
@@ -1900,7 +1900,7 @@ const styles = StyleSheet.create({
   // 서랍
   drawerBackdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(25,31,40,0.45)",
+    backgroundColor: "rgba(11,18,32,0.5)",
   },
   drawer: {
     position: "absolute",

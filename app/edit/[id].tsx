@@ -14,6 +14,9 @@ import {
 import { KeyboardAwareScrollView } from "react-native-keyboard-aware-scroll-view";
 
 import { API } from "@/api/client";
+import { Screen } from "@/components/ui/screen";
+import { Palette, Radius, Spacing, Typo } from "@/constants/theme";
+import { assertClean } from "@/utils/profanity";
 import { useStore } from "../../store/useStore"; // ✅ 경로 확인
 
 export default function EditTeam() {
@@ -60,6 +63,8 @@ export default function EditTeam() {
       return;
     }
 
+    if (!assertClean({ 제목: title, "우리 팀 어필": content })) return;
+
     // 이미 들어온 팀원 수보다 적게는 줄일 수 없다
     // (서버도 filled_count <= capacity 제약으로 한 번 더 막는다)
     if (count < currentCount) {
@@ -96,15 +101,15 @@ export default function EditTeam() {
   };
 
   return (
-    <View style={styles.container}>
+    <Screen>
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => router.back()}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={8}>
           <Text style={styles.cancelText}>취소</Text>
         </TouchableOpacity>
         <Text style={styles.headerTitle}>팀 정보 수정</Text>
-        <TouchableOpacity onPress={handleUpdate} disabled={isSaving}>
+        <TouchableOpacity onPress={handleUpdate} disabled={isSaving} hitSlop={8}>
           {isSaving ? (
-            <ActivityIndicator color="#3288FF" />
+            <ActivityIndicator color={Palette.brand} />
           ) : (
             <Text style={styles.submitText}>완료</Text>
           )}
@@ -113,7 +118,7 @@ export default function EditTeam() {
 
       <KeyboardAwareScrollView
         style={styles.flex}
-        contentContainerStyle={[styles.formContainer, { paddingBottom: 100 }]}
+        contentContainerStyle={styles.formContainer}
         enableOnAndroid
         extraScrollHeight={Platform.OS === "ios" ? 20 : 40}
         enableAutomaticScroll
@@ -194,65 +199,84 @@ export default function EditTeam() {
           * 여기서 내용을 수정하면 상세 페이지에 바로 반영됩니다.
         </Text>
       </KeyboardAwareScrollView>
-    </View>
+    </Screen>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#fff" },
   flex: { flex: 1 },
+
   header: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingTop: 60,
-    paddingBottom: 15,
-    paddingHorizontal: 20,
-    borderBottomWidth: 1,
-    borderBottomColor: "#eee",
+    paddingVertical: Spacing.md,
+    paddingHorizontal: Spacing.screen,
   },
-  headerTitle: { fontSize: 18, fontWeight: "bold" },
-  cancelText: { fontSize: 16, color: "#666" },
-  submitText: { fontSize: 16, fontWeight: "bold", color: "#3288FF" },
+  headerTitle: { ...Typo.title, fontSize: 17 },
+  cancelText: {
+    fontSize: 15,
+    fontWeight: "600",
+    letterSpacing: -0.3,
+    color: Palette.gray600,
+  },
+  submitText: {
+    fontSize: 15,
+    fontWeight: "700",
+    letterSpacing: -0.3,
+    color: Palette.brand,
+  },
 
-  formContainer: { padding: 20 },
-  label: {
-    fontSize: 14,
-    fontWeight: "bold",
-    marginBottom: 8,
-    marginTop: 20,
-    color: "#333",
+  formContainer: {
+    paddingHorizontal: Spacing.screen,
+    paddingTop: Spacing.xs,
+    paddingBottom: 100,
   },
+  label: {
+    ...Typo.section,
+    marginBottom: Spacing.sm,
+    marginTop: Spacing.xl,
+  },
+  // 흰 화면 위에서는 테두리보다 회색으로 채우는 편이 입력칸임을 더 잘 알린다.
   input: {
-    borderBottomWidth: 1,
-    borderBottomColor: "#ddd",
-    paddingVertical: 10,
-    fontSize: 16,
-    color: "#000",
+    backgroundColor: Palette.gray100,
+    borderRadius: Radius.md,
+    paddingHorizontal: Spacing.lg,
+    paddingVertical: 14,
+    fontSize: 15,
+    fontWeight: "500",
+    letterSpacing: -0.3,
+    color: Palette.gray900,
   },
   textArea: {
-    height: 150,
+    height: 140,
+    paddingTop: 13,
     textAlignVertical: "top",
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 8,
-    padding: 15,
-    marginTop: 5,
-    borderBottomWidth: 1,
+    marginTop: 0,
   },
-  hint: { marginTop: 10, color: "#888", fontSize: 12 },
-  countContainer: { flexDirection: "row", gap: 10 },
+  hint: {
+    ...Typo.caption,
+    marginTop: Spacing.md,
+    lineHeight: 18,
+  },
+  countContainer: { flexDirection: "row", gap: Spacing.sm },
   countButton: {
     flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    backgroundColor: "#f5f5f5",
+    paddingVertical: 14,
+    borderRadius: Radius.md,
+    backgroundColor: Palette.gray100,
     alignItems: "center",
-    borderWidth: 1,
-    borderColor: "transparent",
   },
-  countButtonActive: { backgroundColor: "#E8F3FF", borderColor: "#3288FF" },
-  countText: { fontSize: 16, color: "#888", fontWeight: "bold" },
-  countTextActive: { color: "#3288FF" },
-  countTextDisabled: { color: "#ccc" },
+  countButtonActive: {
+    backgroundColor: Palette.brand,
+    borderColor: Palette.brand,
+  },
+  countText: {
+    fontSize: 15,
+    fontWeight: "700",
+    letterSpacing: -0.3,
+    color: Palette.gray600,
+  },
+  countTextActive: { color: Palette.white },
+  countTextDisabled: { color: Palette.gray400 },
 });

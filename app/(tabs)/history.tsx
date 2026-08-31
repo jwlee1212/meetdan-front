@@ -15,11 +15,11 @@ import {
 
 import { API } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
-import { EmptyState } from "@/components/ui/empty-state";
+import { EmptyHint, EmptyState } from "@/components/ui/empty-state";
 import { PressScale } from "@/components/ui/press-scale";
 import { Divider, Screen, ScreenHeader } from "@/components/ui/screen";
 import { Segmented } from "@/components/ui/segmented";
-import { Palette, Radius, Spacing, Typo } from "@/constants/theme";
+import { Palette, Radius, Shadow, Spacing, Typo } from "@/constants/theme";
 import { dDayLabel, formatPlanSummary, isPastPlan } from "@/utils/plan";
 import { Match, MatchRequest, useStore } from "../../store/useStore";
 
@@ -121,8 +121,8 @@ export default function HistoryTab() {
 
     return (
       <PressScale
-        scaleTo={0.98}
-        style={styles.row}
+        scaleTo={0.985}
+        style={[styles.card, styles.row, muted && styles.cardMuted]}
         disabled={!actionable}
         // 상세 화면은 '신청 한 건'을 연다. 팀 id 로는 어느 신청인지 알 수 없다.
         onPress={() =>
@@ -183,9 +183,9 @@ export default function HistoryTab() {
     const completed = !!plan && isPastPlan(plan.date);
 
     return (
-      <View style={completed && styles.completedCard}>
+      <View style={[styles.card, completed && styles.completedCard]}>
         <PressScale
-          scaleTo={0.98}
+          scaleTo={0.985}
           style={styles.row}
           onPress={() => router.push(`/chat/${item.id}` as any)}
         >
@@ -272,18 +272,39 @@ export default function HistoryTab() {
       icon: "mail-outline" as const,
       title: "받은 신청이 없어요",
       description: "팀을 게시판에 공개하면 신청을 받을 수 있어요.",
+      hints: [
+        { icon: "eye-outline" as const, text: "내 팀 탭에서 공개 상태를 확인해보세요" },
+        { icon: "notifications-outline" as const, text: "신청이 오면 알림으로 알려드려요" },
+      ],
     },
     SENT: {
       icon: "paper-plane-outline" as const,
       title: "보낸 신청이 없어요",
       description: "마음에 드는 팀에 먼저 신청해보세요.",
+      hints: [
+        { icon: "home-outline" as const, text: "홈 탭에서 열린 팀을 둘러볼 수 있어요" },
+        { icon: "time-outline" as const, text: "상대가 수락하면 바로 채팅이 열려요" },
+      ],
     },
     MATCHES: {
       icon: "chatbubbles-outline" as const,
       title: "성사된 매칭이 없어요",
       description: "신청을 수락하면 여기에서 바로 대화할 수 있어요.",
+      hints: [
+        { icon: "calendar-outline" as const, text: "채팅방에서 만날 날짜를 정할 수 있어요" },
+        { icon: "shield-checkmark-outline" as const, text: "불쾌한 상대는 신고·차단할 수 있어요" },
+      ],
     },
   }[activeTab];
+
+  const { hints, ...emptyProps } = emptyByTab;
+  const emptyView = (
+    <EmptyState {...emptyProps}>
+      {hints.map((h) => (
+        <EmptyHint key={h.text} icon={h.icon} text={h.text} />
+      ))}
+    </EmptyState>
+  );
 
   return (
     <Screen>
@@ -309,7 +330,7 @@ export default function HistoryTab() {
           renderItem={renderMatchItem}
           keyExtractor={(item) => item.id}
           showsVerticalScrollIndicator={false}
-          ItemSeparatorComponent={() => <Divider inset={76} />}
+          ItemSeparatorComponent={() => <Divider inset={72} />}
           contentContainerStyle={styles.listContent}
           refreshControl={
             <RefreshControl
@@ -318,7 +339,7 @@ export default function HistoryTab() {
               tintColor={Palette.brand}
             />
           }
-          ListEmptyComponent={<EmptyState {...emptyByTab} />}
+          ListEmptyComponent={emptyView}
         />
       ) : (
         <FlatList
@@ -326,7 +347,7 @@ export default function HistoryTab() {
           renderItem={renderRequestItem}
           keyExtractor={(item) => item.id}
           showsVerticalScrollIndicator={false}
-          ItemSeparatorComponent={() => <Divider inset={76} />}
+          ItemSeparatorComponent={() => <Divider inset={72} />}
           contentContainerStyle={styles.listContent}
           refreshControl={
             <RefreshControl
@@ -335,7 +356,7 @@ export default function HistoryTab() {
               tintColor={Palette.brand}
             />
           }
-          ListEmptyComponent={<EmptyState {...emptyByTab} />}
+          ListEmptyComponent={emptyView}
         />
       )}
     </Screen>
@@ -344,7 +365,14 @@ export default function HistoryTab() {
 
 const styles = StyleSheet.create({
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
-  listContent: { paddingTop: Spacing.sm, paddingBottom: Spacing.xxxl },
+  listContent: { paddingBottom: Spacing.xxxl },
+
+  // 좌우 끝까지 꽉 찬 흰 행. 카드로 띄우지 않고 헤어라인으로만 나눈다.
+  card: {
+    backgroundColor: Palette.white,
+  },
+  // 이미 끝난 신청은 한 톤 내려 눕혀둔다
+  cardMuted: { backgroundColor: Palette.gray50 },
 
   row: {
     flexDirection: "row",
@@ -352,7 +380,6 @@ const styles = StyleSheet.create({
     gap: Spacing.md,
     paddingHorizontal: Spacing.screen,
     paddingVertical: Spacing.lg,
-    backgroundColor: Palette.white,
   },
 
   avatarWrap: { position: "relative" },
@@ -364,7 +391,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  avatarMuted: { backgroundColor: Palette.gray50 },
+  avatarMuted: { backgroundColor: Palette.gray200 },
   avatarBrand: { backgroundColor: Palette.brandWeak },
   avatarDone: { backgroundColor: Palette.gray100 },
   avatarText: {
@@ -373,7 +400,7 @@ const styles = StyleSheet.create({
     letterSpacing: -0.3,
     color: Palette.gray700,
   },
-  avatarTextMuted: { color: Palette.gray400 },
+  avatarTextMuted: { color: Palette.gray600 },
   newDot: {
     position: "absolute",
     top: -1,
@@ -393,8 +420,8 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: Spacing.sm,
   },
-  title: { ...Typo.subtitle, fontSize: 16, flex: 1 },
-  time: { ...Typo.caption, fontSize: 12, color: Palette.gray400 },
+  title: { ...Typo.subtitle, flex: 1 },
+  time: { ...Typo.caption, fontSize: 12, color: Palette.gray500 },
   meta: { ...Typo.caption, marginTop: 3 },
   statusRow: {
     flexDirection: "row",
@@ -422,7 +449,7 @@ const styles = StyleSheet.create({
     borderRadius: Radius.md,
     backgroundColor: Palette.white,
     borderWidth: 1,
-    borderColor: Palette.gray200,
+    borderColor: Palette.gray300,
   },
   reviewButtonText: {
     fontSize: 14,

@@ -11,6 +11,8 @@ import Svg, {
   Path,
 } from "react-native-svg";
 
+import { Palette } from "@/constants/theme";
+
 interface MeetDanLogoProps {
   size?: number; // 로고 크기 (기본 120)
   showText?: boolean; // 글자 보여줄지 여부 (기본 true)
@@ -33,8 +35,8 @@ export default function MeetDanLogo({
               x2="100%"
               y2="100%"
             >
-              <Stop offset="0%" stopColor="#5BA3FF" />
-              <Stop offset="100%" stopColor="#0066FF" />
+              <Stop offset="0%" stopColor={Palette.brand} />
+              <Stop offset="100%" stopColor={Palette.brandPressed} />
             </LinearGradient>
           </Defs>
 
@@ -48,21 +50,29 @@ export default function MeetDanLogo({
             fill="url(#blueGradient)"
           />
 
-          {/* 아이콘 그룹 (중앙 정렬) */}
-          <G x="60" y="60">
-            {/* 왼쪽 사람 */}
-            <Circle cx="-12" cy="-8" r="6" fill="white" />
-            <Rect x="-18" y="0" width="12" height="16" rx="6" fill="white" />
+          {/* 아이콘 그룹. 하트까지 포함한 세로 범위가 -32~17이라
+              중심을 맞추려고 60이 아니라 64로 내려 잡았다. */}
+          <G x="60" y="64">
+            {/* 왼쪽 사람 — 머리와 어깨가 붙어 있어야 "사람"으로 읽힌다.
+                알약 모양 몸통은 떨어진 동그라미 두 개로 보인다. */}
+            <Circle cx="-15" cy="-7" r="7" fill="white" />
+            <Path
+              d="M -15,3 C -6.5,3 -3.5,9 -3.5,17 L -26.5,17 C -26.5,9 -23.5,3 -15,3 Z"
+              fill="white"
+            />
 
             {/* 오른쪽 사람 */}
-            <Circle cx="12" cy="-8" r="6" fill="white" />
-            <Rect x="6" y="0" width="12" height="16" rx="6" fill="white" />
-
-            {/* 중앙 하트 (크기 조절됨) */}
+            <Circle cx="15" cy="-7" r="7" fill="white" />
             <Path
-              d="M 0,2 C -1,0 -2.5,0 -2.5,2 C -2.5,3.5 0,6 0,6 C 0,6 2.5,3.5 2.5,2 C 2.5,0 1,0 0,2 Z"
-              fill="#FF6B9D"
-              transform="scale(1.8)"
+              d="M 15,3 C 23.5,3 26.5,9 26.5,17 L 3.5,17 C 3.5,9 6.5,3 15,3 Z"
+              fill="white"
+            />
+
+            {/* 두 사람 위의 하트 */}
+            <Path
+              d="M 0,8.5 C -2.8,4.8 -9.5,0.5 -9.5,-3.8 C -9.5,-7.6 -6.2,-10 -3.3,-10 C -1.4,-10 -0.4,-8.6 0,-7.6 C 0.4,-8.6 1.4,-10 3.3,-10 C 6.2,-10 9.5,-7.6 9.5,-3.8 C 9.5,0.5 2.8,4.8 0,8.5 Z"
+              fill={Palette.pinkOnBrand}
+              transform="translate(0,-22)"
             />
           </G>
         </Svg>
@@ -90,12 +100,12 @@ const styles = StyleSheet.create({
   },
   title: {
     fontWeight: "bold",
-    color: "#3288FF", // 브랜드 컬러 (파란색)
+    color: Palette.brand,
     letterSpacing: -0.5,
     marginBottom: 4,
   },
   subtitle: {
     fontWeight: "600",
-    color: "#888", // 회색
+    color: Palette.gray600,
   },
 });

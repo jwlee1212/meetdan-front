@@ -56,6 +56,11 @@ export function ReportSheet({
     }
   }, [visible, canBlock]);
 
+  // 여기는 일부러 비속어 필터(utils/profanity)를 걸지 않는다.
+  //
+  // 신고자는 "상대가 ○○라고 했어요"처럼 당한 말을 그대로 옮겨 적어야 한다.
+  // 그걸 막으면 정작 욕설 신고를 못 하게 되어 필터가 가해자를 돕는 꼴이 된다.
+  // 이 글은 운영팀만 보고 다른 사용자에게는 노출되지 않으므로 걸러야 할 이유도 없다.
   const submit = () => {
     if (!reason) return;
     onSubmit({ reason, detail: detail.trim(), alsoBlock });

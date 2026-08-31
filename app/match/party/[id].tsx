@@ -23,7 +23,7 @@ import { API } from "@/api/client";
 import { Badge } from "@/components/ui/badge";
 import { MemberProfileSheet } from "@/components/ui/member-profile-sheet";
 import { PressScale } from "@/components/ui/press-scale";
-import { Divider, NavHeader, Screen } from "@/components/ui/screen";
+import { NavHeader, Screen, SectionGap } from "@/components/ui/screen";
 import { getAvatarSource } from "@/constants/avatars";
 import {
   CampusColor,
@@ -161,7 +161,7 @@ export default function MatchPartyDetail() {
 
   if (isLoading) {
     return (
-      <Screen>
+      <Screen tone="grouped">
         <NavHeader title="상대 팀" onBack={() => router.back()} bordered />
         <View style={styles.center}>
           <ActivityIndicator color={Palette.brand} />
@@ -172,7 +172,7 @@ export default function MatchPartyDetail() {
 
   if (!request) {
     return (
-      <Screen>
+      <Screen tone="grouped">
         <NavHeader title="상대 팀" onBack={() => router.back()} bordered />
         <View style={styles.center}>
           <Text style={styles.emptyText}>신청을 찾을 수 없어요.</Text>
@@ -188,7 +188,7 @@ export default function MatchPartyDetail() {
   const canAnswer = request.received && request.status === "WAITING";
 
   return (
-    <Screen>
+    <Screen tone="grouped">
       <NavHeader title="상대 팀" onBack={() => router.back()} bordered />
 
       <ScrollView
@@ -224,7 +224,8 @@ export default function MatchPartyDetail() {
           </View>
         </View>
 
-        <Divider />
+
+        <SectionGap />
 
         {/* ── 소개글 ───────────────────────────────────── */}
         <View style={styles.section}>
@@ -232,7 +233,8 @@ export default function MatchPartyDetail() {
           <Text style={styles.content}>{team.content}</Text>
         </View>
 
-        <Divider />
+
+        <SectionGap />
 
         {/* ── 팀원 ─────────────────────────────────────── */}
         <View style={styles.section}>
@@ -337,19 +339,14 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   emptyText: { ...Typo.body, color: Palette.gray500 },
 
-  scrollContent: {
-    paddingHorizontal: Spacing.screen,
-    paddingTop: Spacing.md,
-    paddingBottom: 140,
-  },
+  scrollContent: { paddingBottom: 140 },
 
   inbox: {
     flexDirection: "row",
     alignItems: "center",
     gap: 6,
-    paddingHorizontal: Spacing.lg,
+    paddingHorizontal: Spacing.screen,
     paddingVertical: Spacing.md,
-    borderRadius: Radius.md,
     backgroundColor: Palette.brandWeak,
   },
   inboxText: {
@@ -361,7 +358,11 @@ const styles = StyleSheet.create({
   },
   inboxTime: { ...Typo.caption, fontSize: 12 },
 
-  header: { alignItems: "center", paddingTop: Spacing.xl },
+  header: {
+    alignItems: "center",
+    padding: Spacing.xl,
+    backgroundColor: Palette.white,
+  },
   tile: {
     width: 64,
     height: 64,
@@ -395,7 +396,10 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
 
-  section: { paddingVertical: Spacing.xl },
+  section: {
+    padding: Spacing.screen,
+    backgroundColor: Palette.white,
+  },
   sectionTitle: { ...Typo.section, marginBottom: Spacing.md },
   sectionDesc: { ...Typo.caption, marginTop: -Spacing.sm, marginBottom: Spacing.lg },
   content: { ...Typo.body, lineHeight: 24 },
@@ -406,8 +410,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: Spacing.md,
     padding: Spacing.md,
-    borderRadius: Radius.lg,
-    backgroundColor: Palette.gray50,
+    borderRadius: Radius.md,
+    backgroundColor: Palette.gray100,
   },
   memberAvatar: {
     width: 44,
@@ -433,7 +437,7 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.md,
     backgroundColor: Palette.white,
     borderTopWidth: 1,
-    borderTopColor: Palette.gray100,
+    borderTopColor: Palette.gray200,
     ...Shadow.soft,
   },
   footerRow: { flexDirection: "row", gap: Spacing.md },
@@ -471,13 +475,13 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.lg,
     paddingHorizontal: Spacing.lg,
     borderRadius: Radius.md,
-    backgroundColor: Palette.gray50,
+    backgroundColor: Palette.gray100,
   },
   noticeText: {
     flex: 1,
     fontSize: 13,
     fontWeight: "600",
     letterSpacing: -0.2,
-    color: Palette.gray500,
+    color: Palette.gray600,
   },
 });

@@ -123,7 +123,7 @@ const styles = StyleSheet.create({
   fill: { flex: 1, justifyContent: "flex-end" },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(25,31,40,0.45)",
+    backgroundColor: "rgba(11,18,32,0.5)",
   },
   sheet: {
     backgroundColor: Palette.white,

@@ -13,6 +13,7 @@ import { Chip } from "@/components/ui/chip";
 import { Palette, Radius, Spacing, Typo } from "@/constants/theme";
 import type { ConfirmedPlan } from "@/store/useStore";
 import { toDateString } from "@/utils/plan";
+import { assertClean } from "@/utils/profanity";
 
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 const PLACE_MAX = 30;
@@ -97,7 +98,12 @@ export function PlanSheet({
     return () => clearTimeout(t);
   }, [visible, initialPlan, days]);
 
-  const submit = () => onSubmit({ date, time, place: place.trim() });
+  // 장소는 확정되면 채팅방 배너로 올라가 양쪽 팀 모두에게 보인다
+  const submit = () => {
+    const trimmed = place.trim();
+    if (!assertClean({ 장소: trimmed })) return;
+    onSubmit({ date, time, place: trimmed });
+  };
 
   return (
     <BottomSheet
@@ -281,7 +287,7 @@ const styles = StyleSheet.create({
   dateMonth: {
     fontSize: 10,
     fontWeight: "600",
-    color: Palette.gray400,
+    color: Palette.gray500,
   },
   dateTextSelected: { color: Palette.white },
 

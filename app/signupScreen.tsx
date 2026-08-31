@@ -22,8 +22,9 @@ import {
   College,
   getCollegesByCampus,
 } from "@/constants/departments";
-import { Colors } from "@/constants/theme";
+import { Colors, Palette } from "@/constants/theme";
 import { useStore } from "@/store/useStore";
+import { assertClean } from "@/utils/profanity";
 import { InputBox } from "../components/InputBox";
 import { MainButton } from "../components/MainButton";
 
@@ -239,6 +240,7 @@ export default function SignupScreen() {
         Alert.alert("알림", "이름을 입력해주세요.");
         return;
       }
+      if (!assertClean({ 이름: name })) return;
       setStep(1);
       return;
     }
@@ -303,6 +305,11 @@ export default function SignupScreen() {
         Alert.alert("알림", "비밀번호가 일치하지 않아요.");
         return;
       }
+
+      // 아이디만 본다. 비밀번호는 아무에게도 보이지 않는 값이라 거를 이유가 없고,
+      // 가려진 칸에서 이유 없이 막히면 사용자는 무엇이 틀렸는지 알 수 없다.
+      // 중복 확인(네트워크)보다 먼저 두어 헛왕복을 아낀다.
+      if (!assertClean({ 아이디: userId })) return;
 
       // 아이디 중복은 여기서 걸러낸다. 마지막 단계에서 터지면
       // 이메일 인증까지 다 해놓고 계정 정보 단계로 되돌아가야 해서 사용자가 화난다.
@@ -383,7 +390,7 @@ export default function SignupScreen() {
       <View style={styles.header}>
         <View style={styles.headerRow}>
           <TouchableOpacity onPress={handleBack} hitSlop={10}>
-            <Ionicons name="chevron-back" size={26} color="#333" />
+            <Ionicons name="chevron-back" size={26} color={Palette.gray800} />
           </TouchableOpacity>
           <Text style={styles.stepIndicator}>
             {step + 1} / {TOTAL_STEPS}
@@ -451,7 +458,7 @@ export default function SignupScreen() {
                 <Ionicons
                   name="male"
                   size={22}
-                  color={gender === "M" ? "#fff" : "#666"}
+                  color={gender === "M" ? Palette.white : Palette.gray600}
                 />
                 <Text
                   style={[
@@ -473,7 +480,7 @@ export default function SignupScreen() {
                 <Ionicons
                   name="female"
                   size={22}
-                  color={gender === "F" ? "#fff" : "#666"}
+                  color={gender === "F" ? Palette.white : Palette.gray600}
                 />
                 <Text
                   style={[
@@ -540,7 +547,7 @@ export default function SignupScreen() {
                       <Ionicons
                         name="chevron-forward"
                         size={18}
-                        color="#B0B8C1"
+                        color={Palette.gray400}
                       />
                     </TouchableOpacity>
                   ))}
@@ -587,7 +594,7 @@ export default function SignupScreen() {
                         <Ionicons
                           name="chevron-forward"
                           size={18}
-                          color="#B0B8C1"
+                          color={Palette.gray400}
                         />
                       </TouchableOpacity>
                     ))}
@@ -730,7 +737,7 @@ export default function SignupScreen() {
                   disabled={isVerifying}
                 >
                   {isVerifying ? (
-                    <ActivityIndicator color="#fff" />
+                    <ActivityIndicator color={Palette.white} />
                   ) : (
                     <Text style={styles.verifyButtonText}>확인</Text>
                   )}
@@ -740,7 +747,7 @@ export default function SignupScreen() {
 
             {isEmailVerified && (
               <View style={styles.verifiedBanner}>
-                <Ionicons name="checkmark-circle" size={18} color="#2FB56B" />
+                <Ionicons name="checkmark-circle" size={18} color={Palette.green} />
                 <Text style={styles.verifiedText}>
                   이메일 인증이 완료되었어요
                 </Text>
@@ -794,7 +801,7 @@ function DeptRow({
           {
             backgroundColor: selectAnim.interpolate({
               inputRange: [0, 1],
-              outputRange: ["#FFFFFF", Colors.light.primaryMuted],
+              outputRange: [Palette.white, Colors.light.primaryMuted],
             }),
           },
         ]}
@@ -805,7 +812,7 @@ function DeptRow({
             {
               color: selectAnim.interpolate({
                 inputRange: [0, 1],
-                outputRange: ["#333333", Colors.light.primary],
+                outputRange: [Palette.gray700, Colors.light.primary],
               }),
             },
           ]}
@@ -836,7 +843,7 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   container: {
     flex: 1,
-    backgroundColor: "#fff",
+    backgroundColor: Palette.white,
   },
   header: {
     paddingTop: 60,
@@ -852,12 +859,13 @@ const styles = StyleSheet.create({
   stepIndicator: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#999",
+    letterSpacing: -0.2,
+    color: Palette.gray600,
   },
   progressTrack: {
     height: 6,
     borderRadius: 3,
-    backgroundColor: "#EEF1F5",
+    backgroundColor: Palette.gray100,
     overflow: "hidden",
   },
   progressFill: {
@@ -871,15 +879,18 @@ const styles = StyleSheet.create({
     paddingTop: 20,
   },
   title: {
-    fontSize: 26,
-    fontWeight: "bold",
-    color: "#222",
+    fontSize: 25,
+    fontWeight: "800",
+    letterSpacing: -0.7,
+    color: Palette.gray900,
     lineHeight: 34,
     marginBottom: 10,
   },
   subtitle: {
     fontSize: 15,
-    color: "#888",
+    fontWeight: "500",
+    letterSpacing: -0.3,
+    color: Palette.gray600,
     marginBottom: 32,
   },
   genderRow: {
@@ -897,7 +908,8 @@ const styles = StyleSheet.create({
     marginTop: 20,
     fontSize: 13,
     lineHeight: 19,
-    color: "#999",
+    letterSpacing: -0.2,
+    color: Palette.gray600,
   },
   genderButton: {
     flex: 1,
@@ -908,8 +920,8 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
     borderRadius: 14,
     borderWidth: 1.5,
-    borderColor: "#ddd",
-    backgroundColor: "#f9f9f9",
+    borderColor: Palette.gray200,
+    backgroundColor: Palette.canvas,
   },
   genderButtonActive: {
     backgroundColor: Colors.light.primary,
@@ -918,18 +930,19 @@ const styles = StyleSheet.create({
   genderText: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#666",
+    letterSpacing: -0.3,
+    color: Palette.gray700,
   },
   genderTextActive: {
-    color: "#fff",
+    color: Palette.white,
   },
   // 단과대 / 학과 선택 리스트
   listCard: {
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: "#EEF1F5",
+    borderColor: Palette.gray200,
     overflow: "hidden",
-    backgroundColor: "#fff",
+    backgroundColor: Palette.white,
   },
   listRow: {
     flexDirection: "row",
@@ -938,7 +951,7 @@ const styles = StyleSheet.create({
     paddingVertical: 18,
     paddingHorizontal: 18,
     borderTopWidth: 1,
-    borderTopColor: "#EEF1F5",
+    borderTopColor: Palette.gray200,
   },
   listRowFirst: {
     borderTopWidth: 0,
@@ -949,7 +962,8 @@ const styles = StyleSheet.create({
   listRowText: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#333",
+    letterSpacing: -0.3,
+    color: Palette.gray800,
   },
   listRowTextSelected: {
     color: Colors.light.primary,
@@ -970,7 +984,8 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 15,
     fontWeight: "700",
-    color: "#333",
+    letterSpacing: -0.3,
+    color: Palette.gray800,
   },
   selectionChipAction: {
     fontSize: 14,
@@ -979,7 +994,8 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 14,
-    color: "#999",
+    letterSpacing: -0.2,
+    color: Palette.gray600,
     paddingVertical: 20,
     textAlign: "center",
   },
@@ -993,7 +1009,7 @@ const styles = StyleSheet.create({
     marginTop: -6,
   },
   secondaryButtonDisabled: {
-    borderColor: "#ddd",
+    borderColor: Palette.gray200,
   },
   secondaryButtonText: {
     color: Colors.light.primary,
@@ -1010,7 +1026,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   verifyButton: {
-    backgroundColor: "#333",
+    backgroundColor: Palette.gray900,
     borderRadius: 12,
     paddingHorizontal: 20,
     height: 54,
@@ -1019,9 +1035,10 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   verifyButtonText: {
-    color: "#fff",
+    color: Palette.white,
     fontSize: 15,
-    fontWeight: "bold",
+    fontWeight: "700",
+    letterSpacing: -0.3,
   },
   verifiedBanner: {
     flexDirection: "row",
@@ -1030,10 +1047,10 @@ const styles = StyleSheet.create({
     marginTop: 18,
     padding: 14,
     borderRadius: 12,
-    backgroundColor: "#EFFBF3",
+    backgroundColor: Palette.greenWeak,
   },
   verifiedText: {
-    color: "#2FB56B",
+    color: Palette.greenText,
     fontSize: 14,
     fontWeight: "600",
   },

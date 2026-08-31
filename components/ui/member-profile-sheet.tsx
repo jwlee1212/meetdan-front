@@ -81,5 +81,5 @@ const styles = StyleSheet.create({
     marginBottom: Spacing.md,
     lineHeight: 22,
   },
-  bioEmpty: { color: Palette.gray400 },
+  bioEmpty: { color: Palette.gray500 },
 });

@@ -47,7 +47,7 @@ export default function BlockedListScreen() {
   );
 
   return (
-    <Screen>
+    <Screen tone="grouped">
       <NavHeader title="차단 목록" onBack={() => router.back()} />
 
       <FlatList
@@ -55,7 +55,7 @@ export default function BlockedListScreen() {
         renderItem={renderItem}
         keyExtractor={(item) => item.id}
         showsVerticalScrollIndicator={false}
-        ItemSeparatorComponent={() => <Divider inset={72} />}
+        ItemSeparatorComponent={() => <Divider inset={68} />}
         contentContainerStyle={styles.listContent}
         ListHeaderComponent={
           blockedUsers.length > 0 ? (
@@ -93,10 +93,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-start",
     gap: Spacing.sm,
-    margin: Spacing.screen,
-    padding: Spacing.lg,
-    borderRadius: Radius.md,
-    backgroundColor: Palette.gray50,
+    paddingHorizontal: Spacing.screen,
+    paddingVertical: Spacing.lg,
+    marginBottom: Spacing.gap,
+    backgroundColor: Palette.brandWeak,
   },
   noticeText: {
     ...Typo.caption,
@@ -109,7 +109,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: Spacing.md,
     paddingHorizontal: Spacing.screen,
-    paddingVertical: Spacing.lg,
+    paddingVertical: Spacing.md,
+    backgroundColor: Palette.white,
   },
   avatar: {
     width: 40,
